@@ -1,0 +1,73 @@
+{
+  "poll_interval_minutes": 60,
+  "request_delay_seconds": 4,
+  "request_jitter_seconds": 1.5,
+  "recipient_email": "whtitefall@gmail.com",
+  "smtp_host": "smtp.gmail.com",
+  "smtp_port": 465,
+  "unsupported_companies": ["Uber"],
+  "sources": {
+    "google_careers": [
+      {
+        "company": "Google",
+        "location": "Canada",
+        "q": "software developer",
+        "title_keywords": ["software developer", "software engineer", "developer"]
+      }
+    ],
+    "microsoft_careers": [
+      {
+        "company": "Microsoft",
+        "endpoint": "https://apply.careers.microsoft.com/api/pcsx/search",
+        "domain": "microsoft.com",
+        "location": "Canada",
+        "q": "software developer",
+        "limit": 20,
+        "max_pages": 5,
+        "title_keywords": ["software developer", "software engineer", "developer"]
+      }
+    ],
+    "workday_cxs": [
+      {
+        "company": "Workday",
+        "endpoint": "https://workday.wd5.myworkdayjobs.com/wday/cxs/workday/Workday/jobs",
+        "q": "software developer",
+        "limit": 20,
+        "max_pages": 5,
+        "title_keywords": ["software developer", "software engineer", "developer"]
+      },
+      {
+        "company": "Qualcomm",
+        "endpoint": "https://qualcomm.wd12.myworkdayjobs.com/wday/cxs/qualcomm/External/jobs",
+        "q": "software developer",
+        "limit": 20,
+        "max_pages": 5,
+        "title_keywords": ["software developer", "software engineer", "developer"]
+      }
+    ],
+    "greenhouse": [
+      {
+        "company": "Instacart",
+        "token": "instacart",
+        "title_keywords": ["software developer", "software engineer", "developer"]
+      },
+      {
+        "company": "Robinhood",
+        "token": "robinhood",
+        "title_keywords": ["software developer", "software engineer", "developer"]
+      },
+      {
+        "company": "DoorDash",
+        "token": "doordashusa",
+        "title_keywords": ["software developer", "software engineer", "developer"]
+      }
+    ],
+    "lever": [
+      {
+        "company": "Spotify",
+        "handle": "spotify",
+        "title_keywords": ["software developer", "software engineer", "developer"]
+      }
+    ]
+  }
+}
