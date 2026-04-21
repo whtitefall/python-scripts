@@ -82,6 +82,7 @@ python .\job_monitor.py
 ## 5) 状态文件
 
 脚本会生成 `.job_monitor_state.json`，用于记住已通知过的岗位，避免重复发信。
+在 GitHub Actions 中，该状态文件会自动通过缓存恢复和保存，实现跨运行持久化增量监控。
 
 ## 6) 常见问题
 

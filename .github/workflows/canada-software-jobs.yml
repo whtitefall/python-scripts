@@ -28,9 +28,25 @@ jobs:
     env:
       SMTP_USER: ${{ secrets.SMTP_USER }}
       SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      STATE_FILE: job-monitor/.job_monitor_state.json
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Restore monitor state
+        id: restore_state
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.STATE_FILE }}
+          key: canada-software-jobs-state-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            canada-software-jobs-state-${{ github.ref_name }}-
+            canada-software-jobs-state-
+
+      - name: Ensure state directory exists
+        shell: bash
+        run: |
+          mkdir -p "$(dirname "${STATE_FILE}")"
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -49,4 +65,11 @@ jobs:
           if [ "${{ github.event.inputs.send_initial_snapshot || 'false' }}" = "true" ]; then
             EXTRA="--send-initial-snapshot"
           fi
-          python job-monitor/job_monitor.py --config job-monitor/companies.json --state job-monitor/.job_monitor_state.json --once ${EXTRA}
+          python job-monitor/job_monitor.py --config job-monitor/companies.json --state "${STATE_FILE}" --once ${EXTRA}
+
+      - name: Save monitor state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.STATE_FILE }}
+          key: canada-software-jobs-state-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
