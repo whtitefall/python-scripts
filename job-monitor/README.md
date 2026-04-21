@@ -55,6 +55,7 @@ $env:SMTP_PASSWORD="你的16位AppPassword"
 - 地点必须匹配加拿大
 - 职位标题必须命中 `title_keywords`
 - 职位标题命中 `exclude_title_keywords` 时会被排除（例如 `principal/staff/tester`）
+- 当职位描述/资格里出现 `5 years`、`5+ years` 及以上经验要求时，会按 `exclude_required_experience_years_at_or_above` 自动排除
 
 ## 4) 运行
 

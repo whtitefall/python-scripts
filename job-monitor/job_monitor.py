@@ -63,6 +63,57 @@ WORKDAY_CXS_PATTERN = re.compile(
     r"^https://[^/]+/wday/cxs/(?P<tenant>[^/]+)/(?P<site>[^/]+)/jobs/?$",
     re.IGNORECASE,
 )
+EXPERIENCE_WORD_TO_NUM = {
+    "zero": 0,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+    "thirteen": 13,
+    "fourteen": 14,
+    "fifteen": 15,
+}
+EXPERIENCE_NUMBER_PATTERN = r"(?:\d{1,2}|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen)"
+EXPERIENCE_REQUIRED_PATTERN = re.compile(
+    rf"""
+    (?:
+        (?P<min_a>{EXPERIENCE_NUMBER_PATTERN})
+        \s*(?:\+|plus)?\s*
+        (?:(?:-|to|–|—)\s*(?P<max_a>{EXPERIENCE_NUMBER_PATTERN})\s*)?
+        (?:years?|yrs?)
+        (?:\s+of)?
+        (?:\s+\w+){{0,5}}
+        \s+experience
+    )
+    |
+    (?:
+        (?:experience|exp\.?)
+        (?:\s+of)?
+        \s*(?P<min_b>{EXPERIENCE_NUMBER_PATTERN})
+        \s*(?:\+|plus)?\s*
+        (?:(?:-|to|–|—)\s*(?P<max_b>{EXPERIENCE_NUMBER_PATTERN})\s*)?
+        (?:years?|yrs?)
+    )
+    |
+    (?:
+        (?:at\s+least|minimum(?:\s+of)?|min\.?)
+        \s*(?P<min_c>{EXPERIENCE_NUMBER_PATTERN})
+        \s*(?:years?|yrs?)
+        (?:\s+of)?
+        (?:\s+\w+){{0,5}}
+        \s+experience
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
 
 
 @dataclass(frozen=True)
@@ -158,6 +209,70 @@ def title_has_excluded_keywords(title: str, keywords: list[str]) -> bool:
     return any(keyword in lowered_title for keyword in cleaned_keywords)
 
 
+def parse_year_token(token: str | None) -> int | None:
+    if token is None:
+        return None
+    normalized = token.strip().lower()
+    if not normalized:
+        return None
+    if normalized.isdigit():
+        return int(normalized)
+    return EXPERIENCE_WORD_TO_NUM.get(normalized)
+
+
+def to_optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def extract_min_experience_years(text: str) -> list[int]:
+    if not text:
+        return []
+
+    candidates: list[int] = []
+    for match in EXPERIENCE_REQUIRED_PATTERN.finditer(text):
+        for group_name in ("min_a", "min_b", "min_c"):
+            value = parse_year_token(match.group(group_name))
+            if value is not None:
+                candidates.append(value)
+                break
+    return candidates
+
+
+def requires_experience_at_or_above(text: str, threshold: int | None) -> bool:
+    if threshold is None:
+        return False
+    if threshold <= 0:
+        return False
+    min_years = extract_min_experience_years(text)
+    return any(years >= threshold for years in min_years)
+
+
+def flatten_text(value: Any) -> str:
+    parts: list[str] = []
+
+    def walk(node: Any) -> None:
+        if node is None:
+            return
+        if isinstance(node, str):
+            parts.append(node)
+            return
+        if isinstance(node, dict):
+            for child in node.values():
+                walk(child)
+            return
+        if isinstance(node, list):
+            for child in node:
+                walk(child)
+
+    walk(value)
+    return normalize_html_text(" ".join(parts))
+
+
 def normalize_html_text(fragment: str) -> str:
     no_tags = re.sub(r"<[^>]+>", " ", fragment)
     unescaped = html.unescape(no_tags)
@@ -183,9 +298,9 @@ def build_google_careers_search_url(source: dict[str, Any]) -> str:
     return f"{GOOGLE_CAREERS_RESULTS_URL}?{urlencode(params)}"
 
 
-def parse_google_careers_cards(html_text: str, search_url: str) -> list[tuple[str, str, str, str]]:
+def parse_google_careers_cards(html_text: str, search_url: str) -> list[tuple[str, str, str, str, str]]:
     cards = GOOGLE_CARD_SPLIT_PATTERN.split(html_text)
-    parsed: list[tuple[str, str, str, str]] = []
+    parsed: list[tuple[str, str, str, str, str]] = []
 
     for card in cards[1:]:
         title_match = GOOGLE_TITLE_PATTERN.search(card)
@@ -210,7 +325,7 @@ def parse_google_careers_cards(html_text: str, search_url: str) -> list[tuple[st
 
         if not title or not location:
             continue
-        parsed.append((job_id, title, location, absolute_url))
+        parsed.append((job_id, title, location, absolute_url, normalize_html_text(card)))
 
     if parsed:
         return parsed
@@ -218,7 +333,7 @@ def parse_google_careers_cards(html_text: str, search_url: str) -> list[tuple[st
     # Fallback for future HTML changes: parse plain-text page dump lines.
     title_plain = re.compile(r"###\s+(.+)")
     location_plain = re.compile(r"Google\s+\|\s+(.+)")
-    fallback: list[tuple[str, str, str, str]] = []
+    fallback: list[tuple[str, str, str, str, str]] = []
     lines = [line.strip() for line in html_text.splitlines() if line.strip()]
     for idx, line in enumerate(lines):
         title_match = title_plain.match(line)
@@ -234,7 +349,7 @@ def parse_google_careers_cards(html_text: str, search_url: str) -> list[tuple[st
         if title:
             seed = f"{title}|{location}|{search_url}".encode("utf-8")
             fallback_id = f"fallback-{hashlib.sha1(seed).hexdigest()[:16]}"
-            fallback.append((fallback_id, title, location, search_url))
+            fallback.append((fallback_id, title, location, search_url, ""))
     return fallback
 
 
@@ -248,12 +363,15 @@ def fetch_google_careers_jobs(company: str, source: dict[str, Any], session: req
     timestamp = utc_now_iso()
     title_keywords = to_keyword_list(source.get("title_keywords"))
     exclude_title_keywords = to_keyword_list(source.get("exclude_title_keywords"))
-    for job_id, title, location, job_url in parsed:
+    experience_threshold = to_optional_int(source.get("exclude_required_experience_years_at_or_above"))
+    for job_id, title, location, job_url, qualifications_text in parsed:
         if not is_canada_location(location):
             continue
         if not title_matches_keywords(title, title_keywords):
             continue
         if title_has_excluded_keywords(title, exclude_title_keywords):
+            continue
+        if requires_experience_at_or_above(qualifications_text, experience_threshold):
             continue
         jobs.append(
             JobPosting(
@@ -269,7 +387,12 @@ def fetch_google_careers_jobs(company: str, source: dict[str, Any], session: req
     return jobs
 
 
-def fetch_microsoft_jobs(company: str, source: dict[str, Any], session: requests.Session) -> list[JobPosting]:
+def fetch_microsoft_jobs(
+    company: str,
+    source: dict[str, Any],
+    session: requests.Session,
+    detail_text_cache: dict[str, str] | None = None,
+) -> list[JobPosting]:
     endpoint = str(source.get("endpoint", "https://apply.careers.microsoft.com/api/pcsx/search")).strip()
     domain = str(source.get("domain", "microsoft.com")).strip() or "microsoft.com"
     query = str(source.get("q", source.get("search_text", ""))).strip()
@@ -278,9 +401,11 @@ def fetch_microsoft_jobs(company: str, source: dict[str, Any], session: requests
     max_pages = int(source.get("max_pages", 5))
     keyword_list = to_keyword_list(source.get("title_keywords"))
     exclude_keyword_list = to_keyword_list(source.get("exclude_title_keywords"))
+    experience_threshold = to_optional_int(source.get("exclude_required_experience_years_at_or_above"))
 
     jobs: list[JobPosting] = []
     offset = 0
+    details_cache = detail_text_cache if detail_text_cache is not None else {}
 
     for _ in range(max_pages):
         params = {
@@ -319,6 +444,19 @@ def fetch_microsoft_jobs(company: str, source: dict[str, Any], session: requests
             else:
                 job_url = "https://apply.careers.microsoft.com/careers"
 
+            details_text = details_cache.get(job_url)
+            if details_text is None:
+                try:
+                    details_resp = session.get(job_url, timeout=30)
+                    details_resp.raise_for_status()
+                    details_text = normalize_html_text(details_resp.text)
+                except requests.RequestException:
+                    details_text = ""
+                details_cache[job_url] = details_text
+
+            if requires_experience_at_or_above(details_text, experience_threshold):
+                continue
+
             jobs.append(
                 JobPosting(
                     unique_id=f"microsoft:{position_id}",
@@ -338,7 +476,12 @@ def fetch_microsoft_jobs(company: str, source: dict[str, Any], session: requests
     return jobs
 
 
-def fetch_workday_jobs(company: str, source: dict[str, Any], session: requests.Session) -> list[JobPosting]:
+def fetch_workday_jobs(
+    company: str,
+    source: dict[str, Any],
+    session: requests.Session,
+    detail_text_cache: dict[str, str] | None = None,
+) -> list[JobPosting]:
     endpoint = str(source.get("endpoint", "")).strip()
     if not endpoint:
         raise ValueError(f"Workday source for {company} is missing endpoint.")
@@ -352,11 +495,13 @@ def fetch_workday_jobs(company: str, source: dict[str, Any], session: requests.S
     max_pages = int(source.get("max_pages", 5))
     keyword_list = to_keyword_list(source.get("title_keywords"))
     exclude_keyword_list = to_keyword_list(source.get("exclude_title_keywords"))
+    experience_threshold = to_optional_int(source.get("exclude_required_experience_years_at_or_above"))
     extra_payload = source.get("payload") if isinstance(source.get("payload"), dict) else {}
 
     base_for_links = endpoint.split("/wday/cxs/", 1)[0]
     jobs: list[JobPosting] = []
     offset = 0
+    details_cache = detail_text_cache if detail_text_cache is not None else {}
 
     for _ in range(max_pages):
         payload: dict[str, Any] = {"limit": limit, "offset": offset}
@@ -386,6 +531,19 @@ def fetch_workday_jobs(company: str, source: dict[str, Any], session: requests.S
                 job_url = urljoin(base_for_links, external_path)
             else:
                 job_url = endpoint.rsplit("/wday/cxs/", 1)[0]
+
+            details_text = details_cache.get(job_url)
+            if details_text is None:
+                try:
+                    details_resp = session.get(job_url, timeout=30)
+                    details_resp.raise_for_status()
+                    details_text = normalize_html_text(details_resp.text)
+                except requests.RequestException:
+                    details_text = ""
+                details_cache[job_url] = details_text
+
+            if requires_experience_at_or_above(details_text, experience_threshold):
+                continue
 
             req_id = str(item.get("bulletFields", [])[-1] if item.get("bulletFields") else item.get("title", ""))
             unique_id_seed = f"{company}|{external_path}|{req_id}|{title}"
@@ -456,6 +614,7 @@ def fetch_greenhouse_jobs(
     session: requests.Session,
     title_keywords: list[str] | None = None,
     exclude_title_keywords: list[str] | None = None,
+    experience_threshold: int | None = None,
 ) -> list[JobPosting]:
     url = f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true"
     resp = session.get(url, timeout=30)
@@ -473,6 +632,8 @@ def fetch_greenhouse_jobs(
         if not title_matches_keywords(title, keyword_list):
             continue
         if title_has_excluded_keywords(title, excluded_keyword_list):
+            continue
+        if requires_experience_at_or_above(normalize_html_text(str(item.get("content") or "")), experience_threshold):
             continue
         job_id = item.get("id")
         absolute_url = item.get("absolute_url", "")
@@ -496,6 +657,7 @@ def fetch_lever_jobs(
     session: requests.Session,
     title_keywords: list[str] | None = None,
     exclude_title_keywords: list[str] | None = None,
+    experience_threshold: int | None = None,
 ) -> list[JobPosting]:
     url = f"https://api.lever.co/v0/postings/{handle}?mode=json"
     resp = session.get(url, timeout=30)
@@ -514,6 +676,21 @@ def fetch_lever_jobs(
         if not title_matches_keywords(title, keyword_list):
             continue
         if title_has_excluded_keywords(title, excluded_keyword_list):
+            continue
+        lever_details_text = flatten_text(
+            [
+                item.get("description"),
+                item.get("descriptionPlain"),
+                item.get("descriptionBody"),
+                item.get("descriptionBodyPlain"),
+                item.get("additional"),
+                item.get("additionalPlain"),
+                item.get("opening"),
+                item.get("openingPlain"),
+                item.get("lists"),
+            ]
+        )
+        if requires_experience_at_or_above(lever_details_text, experience_threshold):
             continue
         jobs.append(
             JobPosting(
@@ -536,10 +713,16 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
     request_delay = float(config.get("request_delay_seconds", 2.5))
     request_jitter = float(config.get("request_jitter_seconds", 1.0))
     global_excluded_title_keywords = to_keyword_list(config.get("exclude_title_keywords"))
+    global_experience_threshold = to_optional_int(config.get("exclude_required_experience_years_at_or_above"))
+    detail_text_cache: dict[str, str] = {}
 
     def effective_excluded_keywords(source: dict[str, Any]) -> list[str]:
         source_excluded_keywords = to_keyword_list(source.get("exclude_title_keywords"))
         return merge_keywords(global_excluded_title_keywords, source_excluded_keywords)
+
+    def effective_experience_threshold(source: dict[str, Any]) -> int | None:
+        source_threshold = to_optional_int(source.get("exclude_required_experience_years_at_or_above"))
+        return global_experience_threshold if source_threshold is None else source_threshold
 
     def fetch_by_source(
         source_name: str,
@@ -547,6 +730,7 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
         identifier: str,
         title_keywords: list[str] | None = None,
         exclude_title_keywords: list[str] | None = None,
+        experience_threshold: int | None = None,
     ) -> None:
         normalized_key = (source_name, identifier.lower())
         if normalized_key in processed_sources:
@@ -562,6 +746,7 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
                     session,
                     title_keywords=title_keywords,
                     exclude_title_keywords=exclude_title_keywords,
+                    experience_threshold=experience_threshold,
                 )
                 all_jobs.extend(jobs)
                 logging.info("Greenhouse %-20s -> %d Canada jobs", company, len(jobs))
@@ -573,6 +758,7 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
                     session,
                     title_keywords=title_keywords,
                     exclude_title_keywords=exclude_title_keywords,
+                    experience_threshold=experience_threshold,
                 )
                 all_jobs.extend(jobs)
                 logging.info("Lever      %-20s -> %d Canada jobs", company, len(jobs))
@@ -584,6 +770,7 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
                         "url": identifier,
                         "title_keywords": title_keywords or [],
                         "exclude_title_keywords": exclude_title_keywords or [],
+                        "exclude_required_experience_years_at_or_above": experience_threshold,
                     },
                     session,
                 )
@@ -597,8 +784,10 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
                         "endpoint": identifier,
                         "title_keywords": title_keywords or [],
                         "exclude_title_keywords": exclude_title_keywords or [],
+                        "exclude_required_experience_years_at_or_above": experience_threshold,
                     },
                     session,
+                    detail_text_cache=detail_text_cache,
                 )
                 all_jobs.extend(jobs)
                 logging.info("Workday    %-20s -> %d Canada jobs", company, len(jobs))
@@ -610,8 +799,10 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
                         "endpoint": identifier,
                         "title_keywords": title_keywords or [],
                         "exclude_title_keywords": exclude_title_keywords or [],
+                        "exclude_required_experience_years_at_or_above": experience_threshold,
                     },
                     session,
+                    detail_text_cache=detail_text_cache,
                 )
                 all_jobs.extend(jobs)
                 logging.info("Microsoft  %-20s -> %d Canada jobs", company, len(jobs))
@@ -629,6 +820,7 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
         token = str(source.get("token", "")).strip()
         title_keywords = to_keyword_list(source.get("title_keywords"))
         exclude_title_keywords = effective_excluded_keywords(source)
+        experience_threshold = effective_experience_threshold(source)
         if not company or not token:
             continue
         fetch_by_source(
@@ -637,6 +829,7 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
             token,
             title_keywords=title_keywords,
             exclude_title_keywords=exclude_title_keywords,
+            experience_threshold=experience_threshold,
         )
 
     for source in sources.get("lever", []):
@@ -644,6 +837,7 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
         handle = str(source.get("handle", "")).strip()
         title_keywords = to_keyword_list(source.get("title_keywords"))
         exclude_title_keywords = effective_excluded_keywords(source)
+        experience_threshold = effective_experience_threshold(source)
         if not company or not handle:
             continue
         fetch_by_source(
@@ -652,6 +846,7 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
             handle,
             title_keywords=title_keywords,
             exclude_title_keywords=exclude_title_keywords,
+            experience_threshold=experience_threshold,
         )
 
     for source in sources.get("google_careers", []):
@@ -659,6 +854,7 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
         title_keywords = to_keyword_list(source.get("title_keywords"))
         source_payload = dict(source)
         source_payload["exclude_title_keywords"] = effective_excluded_keywords(source)
+        source_payload["exclude_required_experience_years_at_or_above"] = effective_experience_threshold(source)
         sleep_with_jitter(request_delay, request_jitter)
         try:
             jobs = fetch_google_careers_jobs(company, source_payload, session)
@@ -677,9 +873,10 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
         company = str(source.get("company", "Microsoft")).strip() or "Microsoft"
         source_payload = dict(source)
         source_payload["exclude_title_keywords"] = effective_excluded_keywords(source)
+        source_payload["exclude_required_experience_years_at_or_above"] = effective_experience_threshold(source)
         sleep_with_jitter(request_delay, request_jitter)
         try:
-            jobs = fetch_microsoft_jobs(company, source_payload, session)
+            jobs = fetch_microsoft_jobs(company, source_payload, session, detail_text_cache=detail_text_cache)
             all_jobs.extend(jobs)
             logging.info("Microsoft  %-20s -> %d Canada jobs", company, len(jobs))
         except requests.HTTPError as exc:
@@ -692,9 +889,10 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
         company = str(source.get("company", "Workday")).strip() or "Workday"
         source_payload = dict(source)
         source_payload["exclude_title_keywords"] = effective_excluded_keywords(source)
+        source_payload["exclude_required_experience_years_at_or_above"] = effective_experience_threshold(source)
         sleep_with_jitter(request_delay, request_jitter)
         try:
-            jobs = fetch_workday_jobs(company, source_payload, session)
+            jobs = fetch_workday_jobs(company, source_payload, session, detail_text_cache=detail_text_cache)
             all_jobs.extend(jobs)
             logging.info("Workday    %-20s -> %d Canada jobs", company, len(jobs))
         except requests.HTTPError as exc:
@@ -710,6 +908,7 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
         url = str(source.get("url", "")).strip()
         title_keywords = to_keyword_list(source.get("title_keywords"))
         exclude_title_keywords = effective_excluded_keywords(source)
+        experience_threshold = effective_experience_threshold(source)
         if not url:
             continue
         parsed = parse_source_from_career_page(url)
@@ -724,6 +923,7 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
             identifier,
             title_keywords=title_keywords,
             exclude_title_keywords=exclude_title_keywords,
+            experience_threshold=experience_threshold,
         )
 
     unsupported_companies = [str(x).strip() for x in (config.get("unsupported_companies") or []) if str(x).strip()]

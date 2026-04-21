@@ -13,6 +13,7 @@
     "sdet",
     "software development engineer in test"
   ],
+  "exclude_required_experience_years_at_or_above": 5,
   "recipient_email": "whtitefall@gmail.com",
   "smtp_host": "smtp.gmail.com",
   "smtp_port": 465,
