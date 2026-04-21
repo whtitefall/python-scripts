@@ -120,10 +120,40 @@ def sleep_with_jitter(base_delay: float, jitter: float) -> None:
     time.sleep(random.uniform(lower, upper))
 
 
+def to_keyword_list(raw_keywords: Any) -> list[str]:
+    if raw_keywords is None:
+        return []
+    if isinstance(raw_keywords, list):
+        candidates = raw_keywords
+    else:
+        candidates = [raw_keywords]
+    return [str(k).strip() for k in candidates if str(k).strip()]
+
+
+def merge_keywords(base_keywords: list[str], extra_keywords: list[str]) -> list[str]:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for keyword in [*base_keywords, *extra_keywords]:
+        normalized = keyword.strip().lower()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        merged.append(keyword.strip())
+    return merged
+
+
 def title_matches_keywords(title: str, keywords: list[str]) -> bool:
-    cleaned_keywords = [k.strip().lower() for k in keywords if k and k.strip()]
+    cleaned_keywords = [k.lower() for k in to_keyword_list(keywords)]
     if not cleaned_keywords:
         return True
+    lowered_title = title.lower()
+    return any(keyword in lowered_title for keyword in cleaned_keywords)
+
+
+def title_has_excluded_keywords(title: str, keywords: list[str]) -> bool:
+    cleaned_keywords = [k.lower() for k in to_keyword_list(keywords)]
+    if not cleaned_keywords:
+        return False
     lowered_title = title.lower()
     return any(keyword in lowered_title for keyword in cleaned_keywords)
 
@@ -216,13 +246,14 @@ def fetch_google_careers_jobs(company: str, source: dict[str, Any], session: req
     parsed = parse_google_careers_cards(resp.text, search_url)
     jobs: list[JobPosting] = []
     timestamp = utc_now_iso()
-    title_keywords = source.get("title_keywords") or []
-    if not isinstance(title_keywords, list):
-        title_keywords = [str(title_keywords)]
+    title_keywords = to_keyword_list(source.get("title_keywords"))
+    exclude_title_keywords = to_keyword_list(source.get("exclude_title_keywords"))
     for job_id, title, location, job_url in parsed:
         if not is_canada_location(location):
             continue
-        if not title_matches_keywords(title, [str(x) for x in title_keywords]):
+        if not title_matches_keywords(title, title_keywords):
+            continue
+        if title_has_excluded_keywords(title, exclude_title_keywords):
             continue
         jobs.append(
             JobPosting(
@@ -245,10 +276,8 @@ def fetch_microsoft_jobs(company: str, source: dict[str, Any], session: requests
     location = str(source.get("location", "Canada")).strip() or "Canada"
     limit = int(source.get("limit", 20))
     max_pages = int(source.get("max_pages", 5))
-    title_keywords = source.get("title_keywords") or []
-    if not isinstance(title_keywords, list):
-        title_keywords = [str(title_keywords)]
-    keyword_list = [str(x) for x in title_keywords]
+    keyword_list = to_keyword_list(source.get("title_keywords"))
+    exclude_keyword_list = to_keyword_list(source.get("exclude_title_keywords"))
 
     jobs: list[JobPosting] = []
     offset = 0
@@ -276,6 +305,8 @@ def fetch_microsoft_jobs(company: str, source: dict[str, Any], session: requests
             if not is_canada_location(location_text):
                 continue
             if not title_matches_keywords(title, keyword_list):
+                continue
+            if title_has_excluded_keywords(title, exclude_keyword_list):
                 continue
 
             position_id = item.get("id")
@@ -319,10 +350,8 @@ def fetch_workday_jobs(company: str, source: dict[str, Any], session: requests.S
     query = str(source.get("q", source.get("search_text", ""))).strip()
     limit = int(source.get("limit", 20))
     max_pages = int(source.get("max_pages", 5))
-    title_keywords = source.get("title_keywords") or []
-    if not isinstance(title_keywords, list):
-        title_keywords = [str(title_keywords)]
-    keyword_list = [str(x) for x in title_keywords]
+    keyword_list = to_keyword_list(source.get("title_keywords"))
+    exclude_keyword_list = to_keyword_list(source.get("exclude_title_keywords"))
     extra_payload = source.get("payload") if isinstance(source.get("payload"), dict) else {}
 
     base_for_links = endpoint.split("/wday/cxs/", 1)[0]
@@ -348,6 +377,8 @@ def fetch_workday_jobs(company: str, source: dict[str, Any], session: requests.S
             if not is_canada_location(location):
                 continue
             if not title_matches_keywords(title, keyword_list):
+                continue
+            if title_has_excluded_keywords(title, exclude_keyword_list):
                 continue
 
             external_path = str(item.get("externalPath") or "").strip()
@@ -424,6 +455,7 @@ def fetch_greenhouse_jobs(
     token: str,
     session: requests.Session,
     title_keywords: list[str] | None = None,
+    exclude_title_keywords: list[str] | None = None,
 ) -> list[JobPosting]:
     url = f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true"
     resp = session.get(url, timeout=30)
@@ -431,13 +463,16 @@ def fetch_greenhouse_jobs(
     payload = resp.json()
 
     jobs: list[JobPosting] = []
-    keyword_list = title_keywords or []
+    keyword_list = to_keyword_list(title_keywords)
+    excluded_keyword_list = to_keyword_list(exclude_title_keywords)
     for item in payload.get("jobs", []):
         location = (item.get("location") or {}).get("name", "").strip()
         if not is_canada_location(location):
             continue
         title = str(item.get("title", "Untitled")).strip()
         if not title_matches_keywords(title, keyword_list):
+            continue
+        if title_has_excluded_keywords(title, excluded_keyword_list):
             continue
         job_id = item.get("id")
         absolute_url = item.get("absolute_url", "")
@@ -460,6 +495,7 @@ def fetch_lever_jobs(
     handle: str,
     session: requests.Session,
     title_keywords: list[str] | None = None,
+    exclude_title_keywords: list[str] | None = None,
 ) -> list[JobPosting]:
     url = f"https://api.lever.co/v0/postings/{handle}?mode=json"
     resp = session.get(url, timeout=30)
@@ -467,7 +503,8 @@ def fetch_lever_jobs(
     payload = resp.json()
 
     jobs: list[JobPosting] = []
-    keyword_list = title_keywords or []
+    keyword_list = to_keyword_list(title_keywords)
+    excluded_keyword_list = to_keyword_list(exclude_title_keywords)
     for item in payload:
         categories = item.get("categories") or {}
         location = str(categories.get("location", "")).strip()
@@ -475,6 +512,8 @@ def fetch_lever_jobs(
             continue
         title = str(item.get("text", "Untitled")).strip()
         if not title_matches_keywords(title, keyword_list):
+            continue
+        if title_has_excluded_keywords(title, excluded_keyword_list):
             continue
         jobs.append(
             JobPosting(
@@ -496,12 +535,18 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
     processed_sources: set[tuple[str, str]] = set()
     request_delay = float(config.get("request_delay_seconds", 2.5))
     request_jitter = float(config.get("request_jitter_seconds", 1.0))
+    global_excluded_title_keywords = to_keyword_list(config.get("exclude_title_keywords"))
+
+    def effective_excluded_keywords(source: dict[str, Any]) -> list[str]:
+        source_excluded_keywords = to_keyword_list(source.get("exclude_title_keywords"))
+        return merge_keywords(global_excluded_title_keywords, source_excluded_keywords)
 
     def fetch_by_source(
         source_name: str,
         company: str,
         identifier: str,
         title_keywords: list[str] | None = None,
+        exclude_title_keywords: list[str] | None = None,
     ) -> None:
         normalized_key = (source_name, identifier.lower())
         if normalized_key in processed_sources:
@@ -511,26 +556,50 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
 
         try:
             if source_name == "greenhouse":
-                jobs = fetch_greenhouse_jobs(company, identifier, session, title_keywords=title_keywords)
+                jobs = fetch_greenhouse_jobs(
+                    company,
+                    identifier,
+                    session,
+                    title_keywords=title_keywords,
+                    exclude_title_keywords=exclude_title_keywords,
+                )
                 all_jobs.extend(jobs)
                 logging.info("Greenhouse %-20s -> %d Canada jobs", company, len(jobs))
                 return
             if source_name == "lever":
-                jobs = fetch_lever_jobs(company, identifier, session, title_keywords=title_keywords)
+                jobs = fetch_lever_jobs(
+                    company,
+                    identifier,
+                    session,
+                    title_keywords=title_keywords,
+                    exclude_title_keywords=exclude_title_keywords,
+                )
                 all_jobs.extend(jobs)
                 logging.info("Lever      %-20s -> %d Canada jobs", company, len(jobs))
                 return
             if source_name == "google_careers":
                 jobs = fetch_google_careers_jobs(
                     company,
-                    {"url": identifier, "title_keywords": title_keywords or []},
+                    {
+                        "url": identifier,
+                        "title_keywords": title_keywords or [],
+                        "exclude_title_keywords": exclude_title_keywords or [],
+                    },
                     session,
                 )
                 all_jobs.extend(jobs)
                 logging.info("Google     %-20s -> %d Canada jobs", company, len(jobs))
                 return
             if source_name == "workday_cxs":
-                jobs = fetch_workday_jobs(company, {"endpoint": identifier, "title_keywords": title_keywords or []}, session)
+                jobs = fetch_workday_jobs(
+                    company,
+                    {
+                        "endpoint": identifier,
+                        "title_keywords": title_keywords or [],
+                        "exclude_title_keywords": exclude_title_keywords or [],
+                    },
+                    session,
+                )
                 all_jobs.extend(jobs)
                 logging.info("Workday    %-20s -> %d Canada jobs", company, len(jobs))
                 return
@@ -540,6 +609,7 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
                     {
                         "endpoint": identifier,
                         "title_keywords": title_keywords or [],
+                        "exclude_title_keywords": exclude_title_keywords or [],
                     },
                     session,
                 )
@@ -557,25 +627,41 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
     for source in sources.get("greenhouse", []):
         company = str(source.get("company", "")).strip()
         token = str(source.get("token", "")).strip()
-        title_keywords = [str(x) for x in (source.get("title_keywords") or [])]
+        title_keywords = to_keyword_list(source.get("title_keywords"))
+        exclude_title_keywords = effective_excluded_keywords(source)
         if not company or not token:
             continue
-        fetch_by_source("greenhouse", company, token, title_keywords=title_keywords)
+        fetch_by_source(
+            "greenhouse",
+            company,
+            token,
+            title_keywords=title_keywords,
+            exclude_title_keywords=exclude_title_keywords,
+        )
 
     for source in sources.get("lever", []):
         company = str(source.get("company", "")).strip()
         handle = str(source.get("handle", "")).strip()
-        title_keywords = [str(x) for x in (source.get("title_keywords") or [])]
+        title_keywords = to_keyword_list(source.get("title_keywords"))
+        exclude_title_keywords = effective_excluded_keywords(source)
         if not company or not handle:
             continue
-        fetch_by_source("lever", company, handle, title_keywords=title_keywords)
+        fetch_by_source(
+            "lever",
+            company,
+            handle,
+            title_keywords=title_keywords,
+            exclude_title_keywords=exclude_title_keywords,
+        )
 
     for source in sources.get("google_careers", []):
         company = str(source.get("company", "Google")).strip() or "Google"
-        title_keywords = [str(x) for x in (source.get("title_keywords") or [])]
+        title_keywords = to_keyword_list(source.get("title_keywords"))
+        source_payload = dict(source)
+        source_payload["exclude_title_keywords"] = effective_excluded_keywords(source)
         sleep_with_jitter(request_delay, request_jitter)
         try:
-            jobs = fetch_google_careers_jobs(company, source, session)
+            jobs = fetch_google_careers_jobs(company, source_payload, session)
             all_jobs.extend(jobs)
             logging.info("Google     %-20s -> %d Canada jobs", company, len(jobs))
         except requests.HTTPError as exc:
@@ -589,9 +675,11 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
 
     for source in sources.get("microsoft_careers", []):
         company = str(source.get("company", "Microsoft")).strip() or "Microsoft"
+        source_payload = dict(source)
+        source_payload["exclude_title_keywords"] = effective_excluded_keywords(source)
         sleep_with_jitter(request_delay, request_jitter)
         try:
-            jobs = fetch_microsoft_jobs(company, source, session)
+            jobs = fetch_microsoft_jobs(company, source_payload, session)
             all_jobs.extend(jobs)
             logging.info("Microsoft  %-20s -> %d Canada jobs", company, len(jobs))
         except requests.HTTPError as exc:
@@ -602,9 +690,11 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
 
     for source in sources.get("workday_cxs", []):
         company = str(source.get("company", "Workday")).strip() or "Workday"
+        source_payload = dict(source)
+        source_payload["exclude_title_keywords"] = effective_excluded_keywords(source)
         sleep_with_jitter(request_delay, request_jitter)
         try:
-            jobs = fetch_workday_jobs(company, source, session)
+            jobs = fetch_workday_jobs(company, source_payload, session)
             all_jobs.extend(jobs)
             logging.info("Workday    %-20s -> %d Canada jobs", company, len(jobs))
         except requests.HTTPError as exc:
@@ -618,7 +708,8 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
     for source in sources.get("career_pages", []):
         company = str(source.get("company", "")).strip()
         url = str(source.get("url", "")).strip()
-        title_keywords = [str(x) for x in (source.get("title_keywords") or [])]
+        title_keywords = to_keyword_list(source.get("title_keywords"))
+        exclude_title_keywords = effective_excluded_keywords(source)
         if not url:
             continue
         parsed = parse_source_from_career_page(url)
@@ -627,7 +718,13 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
             continue
         source_name, identifier = parsed
         effective_company = company or identifier
-        fetch_by_source(source_name, effective_company, identifier, title_keywords=title_keywords)
+        fetch_by_source(
+            source_name,
+            effective_company,
+            identifier,
+            title_keywords=title_keywords,
+            exclude_title_keywords=exclude_title_keywords,
+        )
 
     unsupported_companies = [str(x).strip() for x in (config.get("unsupported_companies") or []) if str(x).strip()]
     if unsupported_companies:

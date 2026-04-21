@@ -2,6 +2,17 @@
   "poll_interval_minutes": 60,
   "request_delay_seconds": 4,
   "request_jitter_seconds": 1.5,
+  "exclude_title_keywords": [
+    "principal",
+    "principle",
+    "staff",
+    "tester",
+    "test engineer",
+    "quality assurance",
+    "qa engineer",
+    "sdet",
+    "software development engineer in test"
+  ],
   "recipient_email": "whtitefall@gmail.com",
   "smtp_host": "smtp.gmail.com",
   "smtp_port": 465,

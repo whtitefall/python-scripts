@@ -54,6 +54,7 @@ $env:SMTP_PASSWORD="你的16位AppPassword"
 脚本会做两层过滤：
 - 地点必须匹配加拿大
 - 职位标题必须命中 `title_keywords`
+- 职位标题命中 `exclude_title_keywords` 时会被排除（例如 `principal/staff/tester`）
 
 ## 4) 运行
 
