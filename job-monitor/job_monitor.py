@@ -163,6 +163,21 @@ def parse_datetime_from_epoch_seconds(value: Any) -> str:
     return datetime.fromtimestamp(epoch_sec, tz=timezone.utc).replace(microsecond=0).isoformat()
 
 
+def parse_datetime_iso(value: str) -> datetime | None:
+    if not value:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def sleep_with_jitter(base_delay: float, jitter: float) -> None:
     if base_delay <= 0 and jitter <= 0:
         return
@@ -961,11 +976,26 @@ def parse_source_from_career_page(url: str) -> tuple[str, str] | None:
     return None
 
 
+def format_posted_time_with_age(updated_at: str, reference_time: datetime | None = None) -> str:
+    posted_at = parse_datetime_iso(updated_at)
+    if posted_at is None:
+        return f"未知 | {updated_at}"
+
+    now = reference_time or datetime.now(timezone.utc)
+    delta_minutes = int((now - posted_at).total_seconds() // 60)
+    if delta_minutes < 0:
+        delta_minutes = 0
+
+    exact_time = posted_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    return f"{delta_minutes} 分钟前 | {exact_time}"
+
+
 def render_email_body(jobs: list[JobPosting]) -> str:
     lines = [
         "发现新的加拿大科技岗位：",
         "",
     ]
+    now = datetime.now(timezone.utc)
 
     for idx, job in enumerate(jobs, start=1):
         lines.extend(
@@ -973,7 +1003,7 @@ def render_email_body(jobs: list[JobPosting]) -> str:
                 f"{idx}. {job.company} | {job.title}",
                 f"   地点: {job.location}",
                 f"   来源: {job.source}",
-                f"   发布时间(UTC): {job.updated_at}",
+                f"   发布时间: {format_posted_time_with_age(job.updated_at, now)}",
                 f"   链接: {job.url}",
                 "",
             ]

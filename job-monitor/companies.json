@@ -72,6 +72,11 @@
         "company": "DoorDash",
         "token": "doordashusa",
         "title_keywords": ["software developer", "software engineer", "developer"]
+      },
+      {
+        "company": "Pinterest",
+        "token": "pinterest",
+        "title_keywords": ["software developer", "software engineer", "developer"]
       }
     ],
     "lever": [
