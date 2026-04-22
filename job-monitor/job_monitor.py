@@ -375,11 +375,19 @@ def apply_ai_filter(
     model = str(raw_cfg.get("model", "openai/gpt-4o")).strip() or "openai/gpt-4o"
     timeout_seconds = to_optional_int(raw_cfg.get("timeout_seconds"))
     timeout_seconds = timeout_seconds if timeout_seconds and timeout_seconds > 0 else 35
+    priority_mode = to_bool(raw_cfg.get("priority_mode"), False)
     max_jobs = to_optional_int(raw_cfg.get("max_jobs_per_cycle"))
-    max_jobs = max_jobs if max_jobs and max_jobs > 0 else 20
+    if priority_mode:
+        max_jobs = len(jobs)
+    else:
+        max_jobs = max_jobs if max_jobs and max_jobs > 0 else 20
     max_detail_chars = to_optional_int(raw_cfg.get("max_detail_chars"))
     max_detail_chars = max_detail_chars if max_detail_chars and max_detail_chars > 0 else 1400
     fallback_allow = to_bool(raw_cfg.get("fallback_allow_on_error"), True)
+    preferred_min_years = to_optional_int(raw_cfg.get("preferred_min_experience_years"))
+    preferred_domains = to_keyword_list(raw_cfg.get("preferred_role_domains"))
+    ignore_domains = to_keyword_list(raw_cfg.get("ignore_role_domains"))
+    custom_instruction = str(raw_cfg.get("custom_instruction", "")).strip()
 
     review_jobs = jobs[:max_jobs]
     passthrough_jobs = jobs[max_jobs:]
@@ -416,12 +424,21 @@ def apply_ai_filter(
         "You are a strict but practical recruiter assistant for Canada software-engineering alerts. "
         "Return ONLY valid JSON using schema: "
         '{"decisions":[{"unique_id":"<id>","allow":true,"reason":"<short reason>"}]}. '
-        "Rules: prefer individual contributor software developer/engineer roles in Canada. "
+        "Rules: prefer individual contributor software roles in Canada. "
         "Reject clearly non-target roles (manager/director/head, QA/test/SDET-only, principal/staff-level). "
+        "Reject hardware-centric roles (ASIC/chip/design verification/firmware/board/electrical/hardware validation). "
         "If years-of-experience requirements appear multiple times, use the smallest minimum year value to judge. "
-        "Reject if smallest minimum is 5 or more. "
+        "Treat 3+ years and above as acceptable and do NOT reject solely for being senior by years. "
         "If uncertain, set allow=true."
     )
+    if preferred_domains:
+        system_prompt += " Prefer these role families: " + ", ".join(preferred_domains) + "."
+    if ignore_domains:
+        system_prompt += " De-prioritize/reject these domains: " + ", ".join(ignore_domains) + "."
+    if preferred_min_years is not None and preferred_min_years > 0:
+        system_prompt += f" Roles requiring around {preferred_min_years}+ years are explicitly acceptable."
+    if custom_instruction:
+        system_prompt += " Additional user preference: " + custom_instruction
     user_prompt = (
         "Decide whether each job should be emailed to the user. "
         "Input JSON:\n"

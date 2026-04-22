@@ -13,19 +13,39 @@
     "sdet",
     "software development engineer in test"
   ],
-  "exclude_required_experience_years_at_or_above": 5,
+  "exclude_required_experience_years_at_or_above": null,
   "recipient_email": "whtitefall@gmail.com",
   "smtp_host": "smtp.gmail.com",
   "smtp_port": 465,
   "unsupported_companies": ["Uber"],
   "ai_filter": {
     "enabled": true,
+    "priority_mode": true,
     "model": "openai/gpt-4o",
     "endpoint": "https://models.github.ai/inference/chat/completions",
     "timeout_seconds": 35,
-    "max_jobs_per_cycle": 20,
+    "max_jobs_per_cycle": 60,
     "max_detail_chars": 1400,
-    "fallback_allow_on_error": true
+    "fallback_allow_on_error": true,
+    "preferred_min_experience_years": 3,
+    "preferred_role_domains": [
+      "web developer",
+      "frontend",
+      "backend",
+      "full stack",
+      "ai developer",
+      "llm",
+      "machine learning engineer"
+    ],
+    "ignore_role_domains": [
+      "hardware",
+      "asic",
+      "chip",
+      "silicon",
+      "board design",
+      "electrical"
+    ],
+    "custom_instruction": "3年以上经验的岗位都可以，web dev、AI dev、LLM、前后端岗位优先，偏硬件岗位忽略。"
   },
   "sources": {
     "google_careers": [
@@ -33,7 +53,7 @@
         "company": "Google",
         "location": "Canada",
         "q": "software developer",
-        "title_keywords": ["software developer", "software engineer", "developer"]
+        "title_keywords": ["software developer", "software engineer", "developer", "web developer", "frontend developer", "frontend engineer", "front-end developer", "front-end engineer", "backend developer", "backend engineer", "back-end developer", "back-end engineer", "full stack", "full-stack", "ai developer", "ai engineer", "machine learning engineer", "ml engineer", "llm"]
       }
     ],
     "microsoft_careers": [
@@ -45,7 +65,7 @@
         "q": "software developer",
         "limit": 20,
         "max_pages": 5,
-        "title_keywords": ["software developer", "software engineer", "developer"]
+        "title_keywords": ["software developer", "software engineer", "developer", "web developer", "frontend developer", "frontend engineer", "front-end developer", "front-end engineer", "backend developer", "backend engineer", "back-end developer", "back-end engineer", "full stack", "full-stack", "ai developer", "ai engineer", "machine learning engineer", "ml engineer", "llm"]
       }
     ],
     "workday_cxs": [
@@ -55,7 +75,7 @@
         "q": "software developer",
         "limit": 20,
         "max_pages": 5,
-        "title_keywords": ["software developer", "software engineer", "developer"]
+        "title_keywords": ["software developer", "software engineer", "developer", "web developer", "frontend developer", "frontend engineer", "front-end developer", "front-end engineer", "backend developer", "backend engineer", "back-end developer", "back-end engineer", "full stack", "full-stack", "ai developer", "ai engineer", "machine learning engineer", "ml engineer", "llm"]
       },
       {
         "company": "Qualcomm",
@@ -63,7 +83,7 @@
         "q": "software developer",
         "limit": 20,
         "max_pages": 5,
-        "title_keywords": ["software developer", "software engineer", "developer"]
+        "title_keywords": ["software developer", "software engineer", "developer", "web developer", "frontend developer", "frontend engineer", "front-end developer", "front-end engineer", "backend developer", "backend engineer", "back-end developer", "back-end engineer", "full stack", "full-stack", "ai developer", "ai engineer", "machine learning engineer", "ml engineer", "llm"]
       }
     ],
     "jibe": [
@@ -74,37 +94,38 @@
         "q": "software developer",
         "limit": 20,
         "max_pages": 5,
-        "title_keywords": ["software developer", "software engineer", "developer"]
+        "title_keywords": ["software developer", "software engineer", "developer", "web developer", "frontend developer", "frontend engineer", "front-end developer", "front-end engineer", "backend developer", "backend engineer", "back-end developer", "back-end engineer", "full stack", "full-stack", "ai developer", "ai engineer", "machine learning engineer", "ml engineer", "llm"]
       }
     ],
     "greenhouse": [
       {
         "company": "Instacart",
         "token": "instacart",
-        "title_keywords": ["software developer", "software engineer", "developer"]
+        "title_keywords": ["software developer", "software engineer", "developer", "web developer", "frontend developer", "frontend engineer", "front-end developer", "front-end engineer", "backend developer", "backend engineer", "back-end developer", "back-end engineer", "full stack", "full-stack", "ai developer", "ai engineer", "machine learning engineer", "ml engineer", "llm"]
       },
       {
         "company": "Robinhood",
         "token": "robinhood",
-        "title_keywords": ["software developer", "software engineer", "developer"]
+        "title_keywords": ["software developer", "software engineer", "developer", "web developer", "frontend developer", "frontend engineer", "front-end developer", "front-end engineer", "backend developer", "backend engineer", "back-end developer", "back-end engineer", "full stack", "full-stack", "ai developer", "ai engineer", "machine learning engineer", "ml engineer", "llm"]
       },
       {
         "company": "DoorDash",
         "token": "doordashusa",
-        "title_keywords": ["software developer", "software engineer", "developer"]
+        "title_keywords": ["software developer", "software engineer", "developer", "web developer", "frontend developer", "frontend engineer", "front-end developer", "front-end engineer", "backend developer", "backend engineer", "back-end developer", "back-end engineer", "full stack", "full-stack", "ai developer", "ai engineer", "machine learning engineer", "ml engineer", "llm"]
       },
       {
         "company": "Pinterest",
         "token": "pinterest",
-        "title_keywords": ["software developer", "software engineer", "developer"]
+        "title_keywords": ["software developer", "software engineer", "developer", "web developer", "frontend developer", "frontend engineer", "front-end developer", "front-end engineer", "backend developer", "backend engineer", "back-end developer", "back-end engineer", "full stack", "full-stack", "ai developer", "ai engineer", "machine learning engineer", "ml engineer", "llm"]
       }
     ],
     "lever": [
       {
         "company": "Spotify",
         "handle": "spotify",
-        "title_keywords": ["software developer", "software engineer", "developer"]
+        "title_keywords": ["software developer", "software engineer", "developer", "web developer", "frontend developer", "frontend engineer", "front-end developer", "front-end engineer", "backend developer", "backend engineer", "back-end developer", "back-end engineer", "full stack", "full-stack", "ai developer", "ai engineer", "machine learning engineer", "ml engineer", "llm"]
       }
     ]
   }
 }
+

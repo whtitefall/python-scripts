@@ -59,21 +59,26 @@ $env:SMTP_PASSWORD="你的16位AppPassword"
 - 地点必须匹配加拿大
 - 职位标题必须命中 `title_keywords`
 - 职位标题命中 `exclude_title_keywords` 时会被排除（例如 `principal/staff/tester`）
-- 当职位描述/资格里出现 `5 years`、`5+ years` 及以上经验要求时，会按 `exclude_required_experience_years_at_or_above` 自动排除
+- 若设置 `exclude_required_experience_years_at_or_above`，会按该阈值做硬过滤；当前配置已关闭该硬过滤，交由 AI 二次判断
 - 邮件中的发布时间会显示为“距今分钟数 + 具体 UTC 时间”
 
 ### AI 智能过滤（GitHub Models）
 
-脚本支持“硬规则后再走 AI 判定”：
-- 硬规则先过滤（地点/标题关键词/排除关键词/经验年限）
-- AI 再判定边界案例（例如职位描述里混有多个级别）
+脚本支持“优先 AI 判定”：
+- 先做基础规则过滤（地点/标题关键词/排除关键词）
+- AI 再做主判定（支持领域偏好与硬件岗位忽略）
 
 `companies.json` 中的 `ai_filter` 字段可控制：
 - `enabled`：是否启用
+- `priority_mode`：为 `true` 时优先走 AI（会评估本轮全部职位）
 - `model`：模型 ID（默认 `openai/gpt-4o`）
 - `max_jobs_per_cycle`：每轮最多给 AI 判定多少个职位
 - `max_detail_chars`：每个职位传给 AI 的详情文本长度上限
 - `fallback_allow_on_error`：AI 调用失败时是否回退为“放行”
+- `preferred_min_experience_years`：AI 偏好/接受的经验下限（例如 3 年）
+- `preferred_role_domains`：AI 优先领域（如 web/AI/LLM/前后端）
+- `ignore_role_domains`：AI 忽略方向（如硬件相关）
+- `custom_instruction`：给 AI 的额外自然语言偏好
 
 在 GitHub Actions 中已自动配置 `models: read` 权限，并通过 `GITHUB_TOKEN` 调用 GitHub Models 推理 API。
 
