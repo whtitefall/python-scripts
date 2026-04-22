@@ -514,6 +514,7 @@ def fetch_workday_jobs(
     extra_payload = source.get("payload") if isinstance(source.get("payload"), dict) else {}
 
     base_for_links = endpoint.split("/wday/cxs/", 1)[0]
+    site_name = (match.group("site") or "").strip("/")
     jobs: list[JobPosting] = []
     offset = 0
     details_cache = detail_text_cache if detail_text_cache is not None else {}
@@ -533,17 +534,22 @@ def fetch_workday_jobs(
 
         for item in postings:
             title = str(item.get("title", "Untitled")).strip()
+            external_path = str(item.get("externalPath") or "").strip()
             location = str(item.get("locationsText", "")).strip()
-            if not is_canada_location(location):
+            # Some Workday listings use "2 Locations" and only expose geography in externalPath.
+            location_hint = f"{location} {external_path.replace('/', ' ')}"
+            if not is_canada_location(location_hint):
                 continue
             if not title_matches_keywords(title, keyword_list):
                 continue
             if title_has_excluded_keywords(title, exclude_keyword_list):
                 continue
 
-            external_path = str(item.get("externalPath") or "").strip()
             if external_path:
-                job_url = urljoin(base_for_links, external_path)
+                normalized_path = external_path
+                if normalized_path.startswith("/job/") and site_name:
+                    normalized_path = f"/{site_name}{normalized_path}"
+                job_url = urljoin(base_for_links, normalized_path)
             else:
                 job_url = endpoint.rsplit("/wday/cxs/", 1)[0]
 
