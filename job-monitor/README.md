@@ -7,6 +7,7 @@
 - Microsoft（`apply.careers.microsoft.com/api/pcsx/search`）
 - Workday（官方 Workday CXS）
 - Qualcomm（Workday CXS，当前可能返回 0 职位）
+- AMD（Jibe / iCIMS API）
 - Instacart（Greenhouse）
 - Robinhood（Greenhouse）
 - DoorDash（Greenhouse）
@@ -48,6 +49,7 @@ $env:SMTP_PASSWORD="你的16位AppPassword"
 - `sources.google_careers`：Google Careers
 - `sources.microsoft_careers`：Microsoft Eightfold API
 - `sources.workday_cxs`：Workday CXS API
+- `sources.jibe`：Jibe / iCIMS API（如 AMD）
 - `sources.greenhouse`：Greenhouse API
 - `sources.lever`：Lever API
 - 每个源都支持 `title_keywords` 进行标题二次过滤

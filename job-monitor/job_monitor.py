@@ -583,6 +583,98 @@ def fetch_workday_jobs(
     return jobs
 
 
+def fetch_jibe_jobs(company: str, source: dict[str, Any], session: requests.Session) -> list[JobPosting]:
+    endpoint = str(source.get("endpoint", "")).strip()
+    if not endpoint:
+        raise ValueError(f"Jibe source for {company} is missing endpoint.")
+
+    query = str(source.get("q", source.get("search_text", ""))).strip()
+    country = str(source.get("country", source.get("location", "Canada"))).strip() or "Canada"
+    limit = int(source.get("limit", 20))
+    max_pages = int(source.get("max_pages", 5))
+    keyword_list = to_keyword_list(source.get("title_keywords"))
+    exclude_keyword_list = to_keyword_list(source.get("exclude_title_keywords"))
+    experience_threshold = to_optional_int(source.get("exclude_required_experience_years_at_or_above"))
+    extra_params = source.get("params") if isinstance(source.get("params"), dict) else {}
+
+    parsed_endpoint = urlparse(endpoint)
+    endpoint_host = parsed_endpoint.netloc or "jibe"
+    jobs: list[JobPosting] = []
+
+    for page in range(1, max_pages + 1):
+        params: dict[str, Any] = {"page": page, "limit": limit, "country": country}
+        if query:
+            params["keywords"] = query
+        params.update(extra_params)
+
+        resp = session.get(endpoint, params=params, timeout=30)
+        resp.raise_for_status()
+        payload = resp.json()
+        postings = payload.get("jobs") or []
+        if not postings:
+            break
+
+        for item in postings:
+            data = item.get("data") if isinstance(item, dict) else {}
+            if not isinstance(data, dict):
+                continue
+
+            title = str(data.get("title", "Untitled")).strip()
+            location = str(data.get("full_location") or data.get("location_name") or data.get("short_location") or "").strip()
+            country_text = str(data.get("country", "")).strip()
+            if not is_canada_location(location) and country_text.lower() != "canada":
+                continue
+            if not title_matches_keywords(title, keyword_list):
+                continue
+            if title_has_excluded_keywords(title, exclude_keyword_list):
+                continue
+
+            details_text = flatten_text(
+                [
+                    data.get("description"),
+                    data.get("responsibilities"),
+                    data.get("qualifications"),
+                    data.get("summary"),
+                    data.get("meta_data"),
+                ]
+            )
+            if requires_experience_at_or_above(details_text, experience_threshold):
+                continue
+
+            slug = str(data.get("slug") or data.get("req_id") or "").strip()
+            if not slug:
+                unique_seed = f"{company}|{title}|{location}|{data.get('apply_url', '')}"
+                slug = hashlib.sha1(unique_seed.encode("utf-8")).hexdigest()[:16]
+
+            meta_data = data.get("meta_data") if isinstance(data.get("meta_data"), dict) else {}
+            canonical_url = str(meta_data.get("canonical_url", "")).strip()
+            apply_url = str(data.get("apply_url", "")).strip()
+            job_url = canonical_url or apply_url or endpoint
+
+            posted_raw = str(data.get("posted_date") or data.get("update_date") or data.get("create_date") or "").strip()
+            posted_dt = parse_datetime_iso(posted_raw)
+            updated_at = (
+                posted_dt.astimezone(timezone.utc).replace(microsecond=0).isoformat() if posted_dt else utc_now_iso()
+            )
+
+            jobs.append(
+                JobPosting(
+                    unique_id=f"jibe:{endpoint_host}:{slug}",
+                    source="jibe",
+                    company=company,
+                    title=title,
+                    location=location or country_text or "Unknown",
+                    url=job_url,
+                    updated_at=updated_at,
+                )
+            )
+
+        if len(postings) < limit:
+            break
+
+    return jobs
+
+
 def read_json_file(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")
@@ -822,6 +914,20 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
                 all_jobs.extend(jobs)
                 logging.info("Microsoft  %-20s -> %d Canada jobs", company, len(jobs))
                 return
+            if source_name == "jibe":
+                jobs = fetch_jibe_jobs(
+                    company,
+                    {
+                        "endpoint": identifier,
+                        "title_keywords": title_keywords or [],
+                        "exclude_title_keywords": exclude_title_keywords or [],
+                        "exclude_required_experience_years_at_or_above": experience_threshold,
+                    },
+                    session,
+                )
+                all_jobs.extend(jobs)
+                logging.info("Jibe       %-20s -> %d Canada jobs", company, len(jobs))
+                return
         except requests.HTTPError as exc:
             code = exc.response.status_code if exc.response is not None else "unknown"
             logging.warning("%s fetch failed for %s (%s): HTTP %s", source_name.title(), company, identifier, code)
@@ -917,6 +1023,24 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
             logging.warning("Workday fetch failed for %s: %s", company, exc)
         except ValueError as exc:
             logging.warning("Workday source config error for %s: %s", company, exc)
+
+    for source in sources.get("jibe", []):
+        company = str(source.get("company", "Jibe")).strip() or "Jibe"
+        source_payload = dict(source)
+        source_payload["exclude_title_keywords"] = effective_excluded_keywords(source)
+        source_payload["exclude_required_experience_years_at_or_above"] = effective_experience_threshold(source)
+        sleep_with_jitter(request_delay, request_jitter)
+        try:
+            jobs = fetch_jibe_jobs(company, source_payload, session)
+            all_jobs.extend(jobs)
+            logging.info("Jibe       %-20s -> %d Canada jobs", company, len(jobs))
+        except requests.HTTPError as exc:
+            code = exc.response.status_code if exc.response is not None else "unknown"
+            logging.warning("Jibe fetch failed for %s: HTTP %s", company, code)
+        except requests.RequestException as exc:
+            logging.warning("Jibe fetch failed for %s: %s", company, exc)
+        except ValueError as exc:
+            logging.warning("Jibe source config error for %s: %s", company, exc)
 
     for source in sources.get("career_pages", []):
         company = str(source.get("company", "")).strip()

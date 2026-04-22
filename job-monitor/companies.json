@@ -57,6 +57,17 @@
         "title_keywords": ["software developer", "software engineer", "developer"]
       }
     ],
+    "jibe": [
+      {
+        "company": "AMD",
+        "endpoint": "https://careers.amd.com/api/jobs",
+        "country": "Canada",
+        "q": "software developer",
+        "limit": 20,
+        "max_pages": 5,
+        "title_keywords": ["software developer", "software engineer", "developer"]
+      }
+    ],
     "greenhouse": [
       {
         "company": "Instacart",
