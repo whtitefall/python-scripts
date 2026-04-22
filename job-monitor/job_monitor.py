@@ -63,6 +63,7 @@ WORKDAY_CXS_PATTERN = re.compile(
     r"^https://[^/]+/wday/cxs/(?P<tenant>[^/]+)/(?P<site>[^/]+)/jobs/?$",
     re.IGNORECASE,
 )
+GITHUB_MODELS_INFERENCE_URL = "https://models.github.ai/inference/chat/completions"
 EXPERIENCE_WORD_TO_NUM = {
     "zero": 0,
     "one": 1,
@@ -244,6 +245,21 @@ def to_optional_int(value: Any) -> int | None:
         return None
 
 
+def to_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
 def extract_min_experience_years(text: str) -> list[int]:
     if not text:
         return []
@@ -305,6 +321,181 @@ def normalize_html_text(fragment: str) -> str:
     no_tags = re.sub(r"<[^>]+>", " ", fragment)
     unescaped = html.unescape(no_tags)
     return re.sub(r"\s+", " ", unescaped).strip()
+
+
+def parse_json_object_from_text(text: str) -> dict[str, Any] | None:
+    if not text:
+        return None
+    candidate = text.strip()
+    if not candidate:
+        return None
+
+    if candidate.startswith("```"):
+        candidate = re.sub(r"^```(?:json)?\s*", "", candidate, flags=re.IGNORECASE)
+        candidate = re.sub(r"\s*```$", "", candidate, flags=re.IGNORECASE)
+        candidate = candidate.strip()
+
+    try:
+        parsed = json.loads(candidate)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    start = candidate.find("{")
+    end = candidate.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        parsed = json.loads(candidate[start : end + 1])
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def apply_ai_filter(
+    jobs: list[JobPosting],
+    config: dict[str, Any],
+    session: requests.Session,
+) -> tuple[list[JobPosting], set[str]]:
+    raw_cfg = config.get("ai_filter")
+    if not isinstance(raw_cfg, dict):
+        return jobs, set()
+    if not to_bool(raw_cfg.get("enabled"), False):
+        return jobs, set()
+    if not jobs:
+        return jobs, set()
+
+    token = os.getenv("GITHUB_TOKEN", "").strip()
+    if not token:
+        logging.warning("AI filter enabled but GITHUB_TOKEN is missing. Falling back to hard rules only.")
+        return jobs, set()
+
+    endpoint = str(raw_cfg.get("endpoint", GITHUB_MODELS_INFERENCE_URL)).strip() or GITHUB_MODELS_INFERENCE_URL
+    model = str(raw_cfg.get("model", "openai/gpt-4o")).strip() or "openai/gpt-4o"
+    timeout_seconds = to_optional_int(raw_cfg.get("timeout_seconds"))
+    timeout_seconds = timeout_seconds if timeout_seconds and timeout_seconds > 0 else 35
+    max_jobs = to_optional_int(raw_cfg.get("max_jobs_per_cycle"))
+    max_jobs = max_jobs if max_jobs and max_jobs > 0 else 20
+    max_detail_chars = to_optional_int(raw_cfg.get("max_detail_chars"))
+    max_detail_chars = max_detail_chars if max_detail_chars and max_detail_chars > 0 else 1400
+    fallback_allow = to_bool(raw_cfg.get("fallback_allow_on_error"), True)
+
+    review_jobs = jobs[:max_jobs]
+    passthrough_jobs = jobs[max_jobs:]
+    if len(jobs) > max_jobs:
+        logging.info("AI filter evaluates first %d jobs in this cycle; remaining %d pass through.", max_jobs, len(passthrough_jobs))
+
+    detail_cache: dict[str, str] = {}
+    payload_jobs: list[dict[str, str]] = []
+    for job in review_jobs:
+        details_text = detail_cache.get(job.url)
+        if details_text is None:
+            try:
+                details_resp = session.get(job.url, timeout=30)
+                details_resp.raise_for_status()
+                details_text = normalize_html_text(details_resp.text)
+            except requests.RequestException:
+                details_text = ""
+            detail_cache[job.url] = details_text
+
+        payload_jobs.append(
+            {
+                "unique_id": job.unique_id,
+                "company": job.company,
+                "source": job.source,
+                "title": job.title,
+                "location": job.location,
+                "url": job.url,
+                "updated_at": job.updated_at,
+                "detail_excerpt": details_text[:max_detail_chars],
+            }
+        )
+
+    system_prompt = (
+        "You are a strict but practical recruiter assistant for Canada software-engineering alerts. "
+        "Return ONLY valid JSON using schema: "
+        '{"decisions":[{"unique_id":"<id>","allow":true,"reason":"<short reason>"}]}. '
+        "Rules: prefer individual contributor software developer/engineer roles in Canada. "
+        "Reject clearly non-target roles (manager/director/head, QA/test/SDET-only, principal/staff-level). "
+        "If years-of-experience requirements appear multiple times, use the smallest minimum year value to judge. "
+        "Reject if smallest minimum is 5 or more. "
+        "If uncertain, set allow=true."
+    )
+    user_prompt = (
+        "Decide whether each job should be emailed to the user. "
+        "Input JSON:\n"
+        + json.dumps({"jobs": payload_jobs}, ensure_ascii=False)
+    )
+
+    request_payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0,
+    }
+
+    try:
+        resp = session.post(
+            endpoint,
+            json=request_payload,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+                "Content-Type": "application/json",
+            },
+            timeout=timeout_seconds,
+        )
+        resp.raise_for_status()
+        body = resp.json()
+    except requests.RequestException as exc:
+        logging.warning("AI filter request failed: %s", exc)
+        if fallback_allow:
+            return jobs, set()
+        return passthrough_jobs, {j.unique_id for j in review_jobs}
+
+    content = (
+        ((body.get("choices") or [{}])[0].get("message") or {}).get("content")
+        if isinstance(body, dict)
+        else None
+    )
+    parsed = parse_json_object_from_text(str(content or ""))
+    if not parsed:
+        logging.warning("AI filter returned non-JSON content. Falling back to hard rules only.")
+        if fallback_allow:
+            return jobs, set()
+        return passthrough_jobs, {j.unique_id for j in review_jobs}
+
+    decisions_raw = parsed.get("decisions")
+    if not isinstance(decisions_raw, list):
+        logging.warning("AI filter JSON missing decisions array. Falling back to hard rules only.")
+        if fallback_allow:
+            return jobs, set()
+        return passthrough_jobs, {j.unique_id for j in review_jobs}
+
+    decision_map: dict[str, bool] = {}
+    for item in decisions_raw:
+        if not isinstance(item, dict):
+            continue
+        unique_id = str(item.get("unique_id", "")).strip()
+        if not unique_id:
+            continue
+        decision_map[unique_id] = to_bool(item.get("allow"), True)
+
+    kept: list[JobPosting] = []
+    rejected_ids: set[str] = set()
+    for job in review_jobs:
+        allow = decision_map.get(job.unique_id, True)
+        if allow:
+            kept.append(job)
+        else:
+            rejected_ids.add(job.unique_id)
+
+    logging.info("AI filter kept %d/%d jobs this cycle.", len(kept), len(review_jobs))
+    kept.extend(passthrough_jobs)
+    return kept, rejected_ids
 
 
 def build_google_careers_search_url(source: dict[str, Any]) -> str:
@@ -482,7 +673,7 @@ def fetch_microsoft_jobs(
                     details_text = ""
                 details_cache[job_url] = details_text
 
-            if requires_experience_min_at_or_above(details_text, experience_threshold):
+            if requires_experience_at_or_above(details_text, experience_threshold):
                 continue
 
             jobs.append(
@@ -576,7 +767,7 @@ def fetch_workday_jobs(
                     details_text = ""
                 details_cache[job_url] = details_text
 
-            if requires_experience_at_or_above(details_text, experience_threshold):
+            if requires_experience_min_at_or_above(details_text, experience_threshold):
                 continue
 
             req_id = str(item.get("bulletFields", [])[-1] if item.get("bulletFields") else item.get("title", ""))
@@ -707,6 +898,7 @@ def load_state(path: Path) -> dict[str, Any]:
             "initialized": False,
             "seen_job_ids": [],
             "pending_notifications": [],
+            "ai_rejected_job_ids": [],
             "last_check_at": None,
         }
     try:
@@ -718,12 +910,14 @@ def load_state(path: Path) -> dict[str, Any]:
             "initialized": False,
             "seen_job_ids": [],
             "pending_notifications": [],
+            "ai_rejected_job_ids": [],
             "last_check_at": None,
         }
 
     data.setdefault("initialized", False)
     data.setdefault("seen_job_ids", [])
     data.setdefault("pending_notifications", [])
+    data.setdefault("ai_rejected_job_ids", [])
     data.setdefault("last_check_at", None)
     return data
 
@@ -1216,9 +1410,21 @@ def run_check_cycle(
     smtp_password = os.getenv("SMTP_PASSWORD", "").strip()
 
     jobs = collect_jobs(config, session)
+    ai_cfg = config.get("ai_filter") if isinstance(config.get("ai_filter"), dict) else {}
+    ai_filter_enabled = to_bool(ai_cfg.get("enabled"), False)
     seen_ids = set(str(x) for x in state.get("seen_job_ids", []))
+    ai_rejected_ids = set(str(x) for x in state.get("ai_rejected_job_ids", []))
     pending_map = index_pending_jobs(state.get("pending_notifications", []))
     email_already_attempted = False
+
+    if ai_filter_enabled and jobs:
+        jobs, newly_rejected = apply_ai_filter(jobs, config, session)
+        ai_rejected_ids.difference_update(job.unique_id for job in jobs)
+        ai_rejected_ids.update(newly_rejected)
+        for rejected_id in newly_rejected:
+            pending_map.pop(rejected_id, None)
+        for rejected_id in ai_rejected_ids:
+            pending_map.pop(rejected_id, None)
 
     if not state.get("initialized", False):
         if send_initial_snapshot and jobs:
@@ -1235,7 +1441,7 @@ def run_check_cycle(
         state["initialized"] = True
     else:
         for job in jobs:
-            if job.unique_id in seen_ids or job.unique_id in pending_map:
+            if job.unique_id in seen_ids or job.unique_id in pending_map or job.unique_id in ai_rejected_ids:
                 continue
             pending_map[job.unique_id] = job
 
@@ -1254,6 +1460,7 @@ def run_check_cycle(
 
     state["seen_job_ids"] = sorted(seen_ids)
     state["pending_notifications"] = [asdict(job) for job in pending_jobs]
+    state["ai_rejected_job_ids"] = sorted(ai_rejected_ids)
     state["last_check_at"] = utc_now_iso()
     save_state(state_path, state)
 

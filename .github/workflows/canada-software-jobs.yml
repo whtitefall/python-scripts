@@ -17,6 +17,11 @@ on:
       - ".github/workflows/canada-software-jobs.yml"
       - "job-monitor/**"
 
+permissions:
+  contents: read
+  actions: write
+  models: read
+
 concurrency:
   group: canada-software-jobs-monitor
   cancel-in-progress: false
@@ -28,6 +33,7 @@ jobs:
     env:
       SMTP_USER: ${{ secrets.SMTP_USER }}
       SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       STATE_FILE: job-monitor/.job_monitor_state.json
     steps:
       - name: Checkout

@@ -53,6 +53,7 @@ $env:SMTP_PASSWORD="你的16位AppPassword"
 - `sources.greenhouse`：Greenhouse API
 - `sources.lever`：Lever API
 - 每个源都支持 `title_keywords` 进行标题二次过滤
+- `ai_filter`：GitHub Models 二次智能过滤（可选）
 
 脚本会做两层过滤：
 - 地点必须匹配加拿大
@@ -60,6 +61,21 @@ $env:SMTP_PASSWORD="你的16位AppPassword"
 - 职位标题命中 `exclude_title_keywords` 时会被排除（例如 `principal/staff/tester`）
 - 当职位描述/资格里出现 `5 years`、`5+ years` 及以上经验要求时，会按 `exclude_required_experience_years_at_or_above` 自动排除
 - 邮件中的发布时间会显示为“距今分钟数 + 具体 UTC 时间”
+
+### AI 智能过滤（GitHub Models）
+
+脚本支持“硬规则后再走 AI 判定”：
+- 硬规则先过滤（地点/标题关键词/排除关键词/经验年限）
+- AI 再判定边界案例（例如职位描述里混有多个级别）
+
+`companies.json` 中的 `ai_filter` 字段可控制：
+- `enabled`：是否启用
+- `model`：模型 ID（默认 `openai/gpt-4o`）
+- `max_jobs_per_cycle`：每轮最多给 AI 判定多少个职位
+- `max_detail_chars`：每个职位传给 AI 的详情文本长度上限
+- `fallback_allow_on_error`：AI 调用失败时是否回退为“放行”
+
+在 GitHub Actions 中已自动配置 `models: read` 权限，并通过 `GITHUB_TOKEN` 调用 GitHub Models 推理 API。
 
 ## 4) 运行
 

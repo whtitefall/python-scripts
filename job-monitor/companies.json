@@ -18,6 +18,15 @@
   "smtp_host": "smtp.gmail.com",
   "smtp_port": 465,
   "unsupported_companies": ["Uber"],
+  "ai_filter": {
+    "enabled": true,
+    "model": "openai/gpt-4o",
+    "endpoint": "https://models.github.ai/inference/chat/completions",
+    "timeout_seconds": 35,
+    "max_jobs_per_cycle": 20,
+    "max_detail_chars": 1400,
+    "fallback_allow_on_error": true
+  },
   "sources": {
     "google_careers": [
       {
