@@ -267,6 +267,19 @@ def requires_experience_at_or_above(text: str, threshold: int | None) -> bool:
     return any(years >= threshold for years in min_years)
 
 
+def requires_experience_min_at_or_above(text: str, threshold: int | None) -> bool:
+    if threshold is None:
+        return False
+    if threshold <= 0:
+        return False
+    min_years = extract_min_experience_years(text)
+    if not min_years:
+        return False
+    # Workday pages can include multiple tracks (e.g. Software Engineer + Senior Software Engineer).
+    # In those cases, use the smallest explicitly stated requirement.
+    return min(min_years) >= threshold
+
+
 def flatten_text(value: Any) -> str:
     parts: list[str] = []
 
@@ -469,7 +482,7 @@ def fetch_microsoft_jobs(
                     details_text = ""
                 details_cache[job_url] = details_text
 
-            if requires_experience_at_or_above(details_text, experience_threshold):
+            if requires_experience_min_at_or_above(details_text, experience_threshold):
                 continue
 
             jobs.append(
