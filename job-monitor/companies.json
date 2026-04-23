@@ -1,5 +1,6 @@
 {
   "poll_interval_minutes": 60,
+  "max_post_age_days_for_email": 2,
   "request_delay_seconds": 4,
   "request_jitter_seconds": 1.5,
   "exclude_title_keywords": [
@@ -17,7 +18,7 @@
   "recipient_email": "whtitefall@gmail.com",
   "smtp_host": "smtp.gmail.com",
   "smtp_port": 465,
-  "unsupported_companies": ["Uber"],
+  "unsupported_companies": [],
   "ai_filter": {
     "enabled": true,
     "priority_mode": true,
@@ -65,6 +66,29 @@
         "q": "software developer",
         "limit": 20,
         "max_pages": 5,
+        "title_keywords": ["software developer", "software engineer", "developer", "web developer", "frontend developer", "frontend engineer", "front-end developer", "front-end engineer", "backend developer", "backend engineer", "back-end developer", "back-end engineer", "full stack", "full-stack", "ai developer", "ai engineer", "machine learning engineer", "ml engineer", "llm"]
+      },
+      {
+        "company": "Qualcomm",
+        "endpoint": "https://careers.qualcomm.com/api/pcsx/search",
+        "domain": "qualcomm.com",
+        "location": "Canada",
+        "q": "software developer",
+        "limit": 20,
+        "max_pages": 5,
+        "title_keywords": ["software developer", "software engineer", "developer", "web developer", "frontend developer", "frontend engineer", "front-end developer", "front-end engineer", "backend developer", "backend engineer", "back-end developer", "back-end engineer", "full stack", "full-stack", "ai developer", "ai engineer", "machine learning engineer", "ml engineer", "llm"]
+      }
+    ],
+    "uber_careers": [
+      {
+        "company": "Uber",
+        "careers_url": "https://www.uber.com/us/en/careers/list/",
+        "filter_endpoint": "https://www.uber.com/api/loadFilterOptions",
+        "endpoint": "https://www.uber.com/api/loadSearchJobsResults",
+        "locale_code": "en",
+        "limit": 20,
+        "max_pages": 5,
+        "location_cities": ["Toronto", "Montreal"],
         "title_keywords": ["software developer", "software engineer", "developer", "web developer", "frontend developer", "frontend engineer", "front-end developer", "front-end engineer", "backend developer", "backend engineer", "back-end developer", "back-end engineer", "full stack", "full-stack", "ai developer", "ai engineer", "machine learning engineer", "ml engineer", "llm"]
       }
     ],
@@ -116,6 +140,15 @@
       {
         "company": "Pinterest",
         "token": "pinterest",
+        "title_keywords": ["software developer", "software engineer", "developer", "web developer", "frontend developer", "frontend engineer", "front-end developer", "front-end engineer", "backend developer", "backend engineer", "back-end developer", "back-end engineer", "full stack", "full-stack", "ai developer", "ai engineer", "machine learning engineer", "ml engineer", "llm"]
+      }
+    ],
+    "yelp_careers": [
+      {
+        "company": "Yelp",
+        "endpoint": "https://www.yelp.careers/us/en/search-results",
+        "start_step": 10,
+        "max_pages": 8,
         "title_keywords": ["software developer", "software engineer", "developer", "web developer", "frontend developer", "frontend engineer", "front-end developer", "front-end engineer", "backend developer", "backend engineer", "back-end developer", "back-end engineer", "full stack", "full-stack", "ai developer", "ai engineer", "machine learning engineer", "ml engineer", "llm"]
       }
     ],

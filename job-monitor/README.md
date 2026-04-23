@@ -5,17 +5,17 @@
 当前已接入公司源：
 - Google（Google Careers 页面解析）
 - Microsoft（`apply.careers.microsoft.com/api/pcsx/search`）
+- Uber（`uber.com` 官方 Careers API：`loadFilterOptions` + `loadSearchJobsResults`）
+- Qualcomm Careers（`careers.qualcomm.com/api/pcsx/search`）
 - Workday（官方 Workday CXS）
-- Qualcomm（Workday CXS，当前可能返回 0 职位）
+- Qualcomm（Workday CXS，当前可能返回 0 职位；作为冗余源保留）
 - AMD（Jibe / iCIMS API）
+- Yelp（`yelp.careers` 搜索页内嵌职位数据 + iCIMS apply URL）
 - Instacart（Greenhouse）
 - Robinhood（Greenhouse）
 - DoorDash（Greenhouse）
 - Pinterest（Greenhouse）
 - Spotify（Lever）
-
-当前暂不可稳定接入：
-- Uber（`jobs.uber.com` 在无浏览器挑战场景下持续 403）
 
 ## 1) 安装
 
@@ -45,11 +45,14 @@ $env:SMTP_PASSWORD="你的16位AppPassword"
 
 编辑 `companies.json`：
 - `poll_interval_minutes`：轮询间隔（分钟）
+- `max_post_age_days_for_email`：仅推送最近 N 天发布的岗位（默认 2）
 - `request_delay_seconds` + `request_jitter_seconds`：请求节流，降低反爬风险
 - `sources.google_careers`：Google Careers
 - `sources.microsoft_careers`：Microsoft Eightfold API
+- `sources.uber_careers`：Uber Careers API
 - `sources.workday_cxs`：Workday CXS API
 - `sources.jibe`：Jibe / iCIMS API（如 AMD）
+- `sources.yelp_careers`：Yelp Careers（Phenom + iCIMS）
 - `sources.greenhouse`：Greenhouse API
 - `sources.lever`：Lever API
 - 每个源都支持 `title_keywords` 进行标题二次过滤
@@ -60,7 +63,7 @@ $env:SMTP_PASSWORD="你的16位AppPassword"
 - 职位标题必须命中 `title_keywords`
 - 职位标题命中 `exclude_title_keywords` 时会被排除（例如 `principal/staff/tester`）
 - 若设置 `exclude_required_experience_years_at_or_above`，会按该阈值做硬过滤；当前配置已关闭该硬过滤，交由 AI 二次判断
-- 邮件中的发布时间会显示为“距今分钟数 + 具体 UTC 时间”
+- 邮件中的发布时间会显示为“X天Y小时Z分前 + 具体 UTC 时间”
 
 ### AI 智能过滤（GitHub Models）
 

@@ -63,6 +63,12 @@ WORKDAY_CXS_PATTERN = re.compile(
     r"^https://[^/]+/wday/cxs/(?P<tenant>[^/]+)/(?P<site>[^/]+)/jobs/?$",
     re.IGNORECASE,
 )
+YELP_CAREERS_JOB_PATTERN = re.compile(
+    r'"reqId":"(?P<req_id>\d+)".+?"title":"(?P<title>[^"]+)".+?"postedDate":"(?P<posted_date>[^"]+)".+?'
+    r'"dateCreated":"(?P<created_date>[^"]+)".+?"applyUrl":"(?P<apply_url>https:(?:\/\/|\\\/\\\/)cancareers-yelp\.icims\.com[^"]+\/job)".+?'
+    r'"location":"(?P<location>[^"]+)"',
+    re.DOTALL,
+)
 GITHUB_MODELS_INFERENCE_URL = "https://models.github.ai/inference/chat/completions"
 EXPERIENCE_WORD_TO_NUM = {
     "zero": 0,
@@ -177,6 +183,32 @@ def parse_datetime_iso(value: str) -> datetime | None:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
+
+
+def parse_datetime_to_utc_iso(value: str) -> str:
+    dt = parse_datetime_iso(value)
+    if dt is None:
+        return utc_now_iso()
+    return dt.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def decode_json_escaped_text(value: str) -> str:
+    try:
+        return json.loads(f'"{value}"')
+    except json.JSONDecodeError:
+        return value.replace("\\/", "/").replace('\\"', '"')
+
+
+def format_uber_location_item(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if not isinstance(value, dict):
+        return ""
+    city = str(value.get("city", "")).strip()
+    region = str(value.get("region", "")).strip()
+    country = str(value.get("countryName") or value.get("country") or "").strip()
+    parts = [part for part in [city, region, country] if part]
+    return ", ".join(parts)
 
 
 def sleep_with_jitter(base_delay: float, jitter: float) -> None:
@@ -695,7 +727,11 @@ def fetch_microsoft_jobs(
 
             jobs.append(
                 JobPosting(
-                    unique_id=f"microsoft:{position_id}",
+                    unique_id=(
+                        f"microsoft:{position_id}"
+                        if domain.lower() == "microsoft.com"
+                        else f"pcsx:{domain.lower()}:{position_id}"
+                    ),
                     source="microsoft_careers",
                     company=company,
                     title=title,
@@ -902,6 +938,217 @@ def fetch_jibe_jobs(company: str, source: dict[str, Any], session: requests.Sess
     return jobs
 
 
+def fetch_uber_careers_jobs(company: str, source: dict[str, Any], session: requests.Session) -> list[JobPosting]:
+    careers_url = str(source.get("careers_url", "https://www.uber.com/us/en/careers/list/")).strip()
+    filter_endpoint = str(source.get("filter_endpoint", "https://www.uber.com/api/loadFilterOptions")).strip()
+    search_endpoint = str(source.get("endpoint", "https://www.uber.com/api/loadSearchJobsResults")).strip()
+    locale_code = str(source.get("locale_code", "en")).strip() or "en"
+    query = str(source.get("q", source.get("search_text", ""))).strip()
+    limit = int(source.get("limit", 20))
+    max_pages = int(source.get("max_pages", 5))
+    keyword_list = to_keyword_list(source.get("title_keywords"))
+    exclude_keyword_list = to_keyword_list(source.get("exclude_title_keywords"))
+    experience_threshold = to_optional_int(source.get("exclude_required_experience_years_at_or_above"))
+    location_cities = {str(x).strip().lower() for x in (source.get("location_cities") or []) if str(x).strip()}
+    if not careers_url:
+        raise ValueError(f"Uber source for {company} is missing careers_url.")
+    if not filter_endpoint or not search_endpoint:
+        raise ValueError(f"Uber source for {company} is missing endpoint settings.")
+
+    session.get(careers_url, timeout=30)
+    base_url = urlparse(careers_url)
+    origin = f"{base_url.scheme}://{base_url.netloc}" if base_url.scheme and base_url.netloc else "https://www.uber.com"
+    headers = {
+        "Accept": "application/json,text/plain,*/*",
+        "Content-Type": "application/json",
+        "x-csrf-token": "x",
+        "Origin": origin,
+        "Referer": careers_url,
+    }
+    filter_url = f"{filter_endpoint}?localeCode={locale_code}"
+    search_url = f"{search_endpoint}?localeCode={locale_code}"
+    filter_resp = session.post(filter_url, json={}, headers=headers, timeout=30)
+    filter_resp.raise_for_status()
+    filter_payload = filter_resp.json()
+    if str(filter_payload.get("status", "")).lower() != "success":
+        raise ValueError(f"Uber filter endpoint returned failure status for {company}.")
+
+    all_locations = ((filter_payload.get("data") or {}).get("location")) or []
+    canada_locations: list[dict[str, Any]] = []
+    for item in all_locations:
+        if not isinstance(item, dict):
+            continue
+        country_code = str(item.get("country", "")).strip().upper()
+        country_name = str(item.get("countryName", "")).strip().lower()
+        city = str(item.get("city", "")).strip().lower()
+        if country_code != "CAN" and "canada" not in country_name:
+            continue
+        if location_cities and city not in location_cities:
+            continue
+        canada_locations.append(item)
+    if not canada_locations:
+        raise ValueError(f"Uber source for {company} has no Canada locations in filter options.")
+
+    jobs: list[JobPosting] = []
+    for page in range(max_pages):
+        params_payload: dict[str, Any] = {"location": canada_locations}
+        if query:
+            params_payload["query"] = query
+
+        body = {"limit": limit, "page": page, "params": params_payload}
+        resp = session.post(search_url, json=body, headers=headers, timeout=30)
+        resp.raise_for_status()
+        payload = resp.json()
+        if str(payload.get("status", "")).lower() != "success":
+            data = payload.get("data") or {}
+            message = str(data.get("message", "")).strip()
+            logging.warning("Uber search returned failure status for %s (page=%d): %s", company, page, message or "unknown")
+            break
+
+        data = payload.get("data") or {}
+        results = data.get("results") or []
+        if not results:
+            break
+
+        total_raw = data.get("totalResults")
+        total_low = None
+        if isinstance(total_raw, dict):
+            total_low = to_optional_int(total_raw.get("low"))
+        elif isinstance(total_raw, (int, float, str)):
+            total_low = to_optional_int(total_raw)
+
+        for item in results:
+            title = str(item.get("title", "Untitled")).strip()
+            if not title_matches_keywords(title, keyword_list):
+                continue
+            if title_has_excluded_keywords(title, exclude_keyword_list):
+                continue
+
+            all_locs = item.get("allLocations")
+            location_parts: list[str] = []
+            if isinstance(all_locs, list) and all_locs:
+                for loc_item in all_locs:
+                    formatted = format_uber_location_item(loc_item)
+                    if formatted:
+                        location_parts.append(formatted)
+            else:
+                formatted = format_uber_location_item(item.get("location"))
+                if formatted:
+                    location_parts.append(formatted)
+            location_text = "; ".join(location_parts).strip() or "Unknown"
+            if not is_canada_location(location_text):
+                continue
+
+            details_text = normalize_html_text(str(item.get("description", "")))
+            if requires_experience_at_or_above(details_text, experience_threshold):
+                continue
+
+            job_id_raw = item.get("id")
+            job_id = str(job_id_raw).strip() if job_id_raw is not None else ""
+            if not job_id:
+                unique_seed = f"{company}|{title}|{location_text}|{details_text[:120]}"
+                job_id = hashlib.sha1(unique_seed.encode("utf-8")).hexdigest()[:16]
+            job_url = f"{origin}/us/en/careers/list/{job_id}"
+            updated_raw = str(item.get("creationDate") or item.get("updatedDate") or "").strip()
+
+            jobs.append(
+                JobPosting(
+                    unique_id=f"uber:{job_id}",
+                    source="uber_careers",
+                    company=company,
+                    title=title,
+                    location=location_text,
+                    url=job_url,
+                    updated_at=parse_datetime_to_utc_iso(updated_raw),
+                )
+            )
+
+        if len(results) < limit:
+            break
+        if total_low is not None and (page + 1) * limit >= total_low:
+            break
+
+    return jobs
+
+
+def fetch_yelp_careers_jobs(company: str, source: dict[str, Any], session: requests.Session) -> list[JobPosting]:
+    endpoint = str(source.get("endpoint", "https://www.yelp.careers/us/en/search-results")).strip()
+    start_step = int(source.get("start_step", 10))
+    max_pages = int(source.get("max_pages", 8))
+    title_keywords = to_keyword_list(source.get("title_keywords"))
+    exclude_title_keywords = to_keyword_list(source.get("exclude_title_keywords"))
+    experience_threshold = to_optional_int(source.get("exclude_required_experience_years_at_or_above"))
+    if not endpoint:
+        raise ValueError(f"Yelp source for {company} is missing endpoint.")
+    if start_step < 1:
+        start_step = 10
+    if max_pages < 1:
+        max_pages = 1
+
+    seen_ids: set[str] = set()
+    jobs: list[JobPosting] = []
+    for page_index in range(max_pages):
+        offset = page_index * start_step
+        if offset == 0:
+            page_url = endpoint
+        else:
+            separator = "&" if "?" in endpoint else "?"
+            page_url = f"{endpoint}{separator}from={offset}&s=1"
+
+        resp = session.get(page_url, timeout=30)
+        resp.raise_for_status()
+        page_text = resp.text
+        matches = list(YELP_CAREERS_JOB_PATTERN.finditer(page_text))
+        if not matches:
+            if page_index > 0:
+                break
+            continue
+
+        new_on_page = 0
+        for match in matches:
+            req_id = decode_json_escaped_text(match.group("req_id")).strip()
+            if not req_id or req_id in seen_ids:
+                continue
+            seen_ids.add(req_id)
+            new_on_page += 1
+
+            title = decode_json_escaped_text(match.group("title")).strip()
+            if not title_matches_keywords(title, title_keywords):
+                continue
+            if title_has_excluded_keywords(title, exclude_title_keywords):
+                continue
+
+            location = decode_json_escaped_text(match.group("location")).strip()
+            if not is_canada_location(location):
+                continue
+            if requires_experience_at_or_above(title, experience_threshold):
+                continue
+
+            posted_date = decode_json_escaped_text(match.group("posted_date")).strip()
+            created_date = decode_json_escaped_text(match.group("created_date")).strip()
+            apply_url = decode_json_escaped_text(match.group("apply_url")).strip()
+            updated_raw = posted_date or created_date
+
+            jobs.append(
+                JobPosting(
+                    unique_id=f"yelp:{req_id}",
+                    source="yelp_careers",
+                    company=company,
+                    title=title,
+                    location=location or "Unknown",
+                    url=apply_url or endpoint,
+                    updated_at=parse_datetime_to_utc_iso(updated_raw),
+                )
+            )
+
+        if new_on_page == 0:
+            break
+        if len(matches) < start_step:
+            break
+
+    return jobs
+
+
 def read_json_file(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")
@@ -1068,12 +1315,14 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
         title_keywords: list[str] | None = None,
         exclude_title_keywords: list[str] | None = None,
         experience_threshold: int | None = None,
+        source_config: dict[str, Any] | None = None,
     ) -> None:
         normalized_key = (source_name, identifier.lower())
         if normalized_key in processed_sources:
             return
         processed_sources.add(normalized_key)
         sleep_with_jitter(request_delay, request_jitter)
+        source = source_config if isinstance(source_config, dict) else {}
 
         try:
             if source_name == "greenhouse":
@@ -1144,6 +1393,27 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
                 all_jobs.extend(jobs)
                 logging.info("Microsoft  %-20s -> %d Canada jobs", company, len(jobs))
                 return
+            if source_name == "uber_careers":
+                jobs = fetch_uber_careers_jobs(
+                    company,
+                    {
+                        "careers_url": identifier,
+                        "filter_endpoint": source.get("filter_endpoint", "https://www.uber.com/api/loadFilterOptions"),
+                        "endpoint": source.get("endpoint", "https://www.uber.com/api/loadSearchJobsResults"),
+                        "locale_code": source.get("locale_code", "en"),
+                        "q": source.get("q", source.get("search_text", "")),
+                        "limit": source.get("limit", 20),
+                        "max_pages": source.get("max_pages", 5),
+                        "location_cities": source.get("location_cities", []),
+                        "title_keywords": title_keywords or [],
+                        "exclude_title_keywords": exclude_title_keywords or [],
+                        "exclude_required_experience_years_at_or_above": experience_threshold,
+                    },
+                    session,
+                )
+                all_jobs.extend(jobs)
+                logging.info("Uber       %-20s -> %d Canada jobs", company, len(jobs))
+                return
             if source_name == "jibe":
                 jobs = fetch_jibe_jobs(
                     company,
@@ -1157,6 +1427,22 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
                 )
                 all_jobs.extend(jobs)
                 logging.info("Jibe       %-20s -> %d Canada jobs", company, len(jobs))
+                return
+            if source_name == "yelp_careers":
+                jobs = fetch_yelp_careers_jobs(
+                    company,
+                    {
+                        "endpoint": identifier,
+                        "start_step": source.get("start_step", 10),
+                        "max_pages": source.get("max_pages", 8),
+                        "title_keywords": title_keywords or [],
+                        "exclude_title_keywords": exclude_title_keywords or [],
+                        "exclude_required_experience_years_at_or_above": experience_threshold,
+                    },
+                    session,
+                )
+                all_jobs.extend(jobs)
+                logging.info("Yelp       %-20s -> %d Canada jobs", company, len(jobs))
                 return
         except requests.HTTPError as exc:
             code = exc.response.status_code if exc.response is not None else "unknown"
@@ -1236,6 +1522,24 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
         except requests.RequestException as exc:
             logging.warning("Microsoft fetch failed for %s: %s", company, exc)
 
+    for source in sources.get("uber_careers", []):
+        company = str(source.get("company", "Uber")).strip() or "Uber"
+        careers_url = str(source.get("careers_url", "https://www.uber.com/us/en/careers/list/")).strip()
+        title_keywords = to_keyword_list(source.get("title_keywords"))
+        exclude_title_keywords = effective_excluded_keywords(source)
+        experience_threshold = effective_experience_threshold(source)
+        if not careers_url:
+            continue
+        fetch_by_source(
+            "uber_careers",
+            company,
+            careers_url,
+            title_keywords=title_keywords,
+            exclude_title_keywords=exclude_title_keywords,
+            experience_threshold=experience_threshold,
+            source_config=source,
+        )
+
     for source in sources.get("workday_cxs", []):
         company = str(source.get("company", "Workday")).strip() or "Workday"
         source_payload = dict(source)
@@ -1271,6 +1575,24 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
             logging.warning("Jibe fetch failed for %s: %s", company, exc)
         except ValueError as exc:
             logging.warning("Jibe source config error for %s: %s", company, exc)
+
+    for source in sources.get("yelp_careers", []):
+        company = str(source.get("company", "Yelp")).strip() or "Yelp"
+        endpoint = str(source.get("endpoint", "https://www.yelp.careers/us/en/search-results")).strip()
+        title_keywords = to_keyword_list(source.get("title_keywords"))
+        exclude_title_keywords = effective_excluded_keywords(source)
+        experience_threshold = effective_experience_threshold(source)
+        if not endpoint:
+            continue
+        fetch_by_source(
+            "yelp_careers",
+            company,
+            endpoint,
+            title_keywords=title_keywords,
+            exclude_title_keywords=exclude_title_keywords,
+            experience_threshold=experience_threshold,
+            source_config=source,
+        )
 
     for source in sources.get("career_pages", []):
         company = str(source.get("company", "")).strip()
@@ -1327,6 +1649,12 @@ def parse_source_from_career_page(url: str) -> tuple[str, str] | None:
     if "google.com" in host and "/about/careers/applications/jobs/results" in parsed.path:
         return ("google_careers", url)
 
+    if "yelp.careers" in host and "/search-results" in parsed.path:
+        return ("yelp_careers", url)
+
+    if "uber.com" in host and "/careers/list" in parsed.path:
+        return ("uber_careers", url)
+
     return None
 
 
@@ -1336,12 +1664,68 @@ def format_posted_time_with_age(updated_at: str, reference_time: datetime | None
         return f"未知 | {updated_at}"
 
     now = reference_time or datetime.now(timezone.utc)
-    delta_minutes = int((now - posted_at).total_seconds() // 60)
-    if delta_minutes < 0:
-        delta_minutes = 0
+    delta_seconds = int((now - posted_at).total_seconds())
+    if delta_seconds < 0:
+        delta_seconds = 0
+    delta_minutes = delta_seconds // 60
+    days = delta_minutes // (60 * 24)
+    hours = (delta_minutes % (60 * 24)) // 60
+    minutes = delta_minutes % 60
+    parts: list[str] = []
+    if days > 0:
+        parts.append(f"{days}天")
+    if hours > 0:
+        parts.append(f"{hours}小时")
+    if minutes > 0:
+        parts.append(f"{minutes}分")
+    if not parts:
+        parts.append("0分")
+    relative = "".join(parts) + "前"
 
     exact_time = posted_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    return f"{delta_minutes} 分钟前 | {exact_time}"
+    return f"{relative} | {exact_time}"
+
+
+def split_jobs_by_post_age(
+    jobs: list[JobPosting],
+    max_age_days: int | None,
+    reference_time: datetime | None = None,
+    treat_unknown_as_stale: bool = True,
+) -> tuple[list[JobPosting], list[JobPosting]]:
+    if max_age_days is None or max_age_days <= 0:
+        return jobs, []
+
+    now = reference_time or datetime.now(timezone.utc)
+    max_age_seconds = max_age_days * 24 * 60 * 60
+    kept: list[JobPosting] = []
+    stale: list[JobPosting] = []
+
+    for job in jobs:
+        posted_at = parse_datetime_iso(job.updated_at)
+        if posted_at is None:
+            if treat_unknown_as_stale:
+                stale.append(job)
+            else:
+                kept.append(job)
+            continue
+        age_seconds = int((now - posted_at).total_seconds())
+        if age_seconds < 0:
+            age_seconds = 0
+        if age_seconds <= max_age_seconds:
+            kept.append(job)
+        else:
+            stale.append(job)
+    return kept, stale
+
+
+def sort_jobs_by_updated_desc(jobs: list[JobPosting]) -> list[JobPosting]:
+    def sort_key(job: JobPosting) -> tuple[int, float, str, str, str]:
+        posted_at = parse_datetime_iso(job.updated_at)
+        if posted_at is None:
+            return (1, 0.0, job.company.lower(), job.title.lower(), job.unique_id)
+        return (0, -posted_at.timestamp(), job.company.lower(), job.title.lower(), job.unique_id)
+
+    return sorted(jobs, key=sort_key)
 
 
 def render_email_body(jobs: list[JobPosting]) -> str:
@@ -1350,8 +1734,9 @@ def render_email_body(jobs: list[JobPosting]) -> str:
         "",
     ]
     now = datetime.now(timezone.utc)
+    sorted_jobs = sort_jobs_by_updated_desc(jobs)
 
-    for idx, job in enumerate(jobs, start=1):
+    for idx, job in enumerate(sorted_jobs, start=1):
         lines.extend(
             [
                 f"{idx}. {job.company} | {job.title}",
@@ -1429,10 +1814,29 @@ def run_check_cycle(
     jobs = collect_jobs(config, session)
     ai_cfg = config.get("ai_filter") if isinstance(config.get("ai_filter"), dict) else {}
     ai_filter_enabled = to_bool(ai_cfg.get("enabled"), False)
+    max_post_age_days = to_optional_int(config.get("max_post_age_days_for_email"))
+    if max_post_age_days is None:
+        max_post_age_days = 2
     seen_ids = set(str(x) for x in state.get("seen_job_ids", []))
     ai_rejected_ids = set(str(x) for x in state.get("ai_rejected_job_ids", []))
     pending_map = index_pending_jobs(state.get("pending_notifications", []))
     email_already_attempted = False
+
+    if max_post_age_days > 0 and pending_map:
+        kept_pending, stale_pending = split_jobs_by_post_age(
+            list(pending_map.values()),
+            max_post_age_days,
+            reference_time=datetime.now(timezone.utc),
+            treat_unknown_as_stale=True,
+        )
+        if stale_pending:
+            pending_map = {job.unique_id: job for job in kept_pending}
+            seen_ids.update(job.unique_id for job in stale_pending)
+            logging.info(
+                "Age filter removed %d pending jobs older than %d days.",
+                len(stale_pending),
+                max_post_age_days,
+            )
 
     if ai_filter_enabled and jobs:
         jobs, newly_rejected = apply_ai_filter(jobs, config, session)
@@ -1442,6 +1846,25 @@ def run_check_cycle(
             pending_map.pop(rejected_id, None)
         for rejected_id in ai_rejected_ids:
             pending_map.pop(rejected_id, None)
+
+    if max_post_age_days > 0 and jobs:
+        recent_jobs, stale_jobs = split_jobs_by_post_age(
+            jobs,
+            max_post_age_days,
+            reference_time=datetime.now(timezone.utc),
+            treat_unknown_as_stale=True,
+        )
+        if stale_jobs:
+            seen_ids.update(job.unique_id for job in stale_jobs)
+            for stale_job in stale_jobs:
+                pending_map.pop(stale_job.unique_id, None)
+            logging.info(
+                "Age filter kept %d/%d jobs within %d days.",
+                len(recent_jobs),
+                len(jobs),
+                max_post_age_days,
+            )
+        jobs = recent_jobs
 
     if not state.get("initialized", False):
         if send_initial_snapshot and jobs:
