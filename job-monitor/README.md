@@ -11,6 +11,7 @@
 - Qualcomm（Workday CXS，当前可能返回 0 职位；作为冗余源保留）
 - AMD（Jibe / iCIMS API）
 - Yelp（`yelp.careers` 搜索页内嵌职位数据 + iCIMS apply URL）
+- Amazon（`amazon.jobs/en/search.json`）
 - Instacart（Greenhouse）
 - Robinhood（Greenhouse）
 - DoorDash（Greenhouse）
@@ -53,6 +54,7 @@ $env:SMTP_PASSWORD="你的16位AppPassword"
 - `sources.workday_cxs`：Workday CXS API
 - `sources.jibe`：Jibe / iCIMS API（如 AMD）
 - `sources.yelp_careers`：Yelp Careers（Phenom + iCIMS）
+- `sources.amazon_jobs`：Amazon Jobs JSON API
 - `sources.greenhouse`：Greenhouse API
 - `sources.lever`：Lever API
 - 每个源都支持 `title_keywords` 进行标题二次过滤

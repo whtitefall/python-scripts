@@ -192,6 +192,22 @@ def parse_datetime_to_utc_iso(value: str) -> str:
     return dt.astimezone(timezone.utc).replace(microsecond=0).isoformat()
 
 
+def parse_amazon_posted_date_to_utc_iso(value: str) -> str:
+    text = (value or "").strip()
+    if not text:
+        return utc_now_iso()
+    parsed_iso = parse_datetime_iso(text)
+    if parsed_iso is not None:
+        return parsed_iso.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+    for fmt in ("%B %d, %Y", "%b %d, %Y"):
+        try:
+            dt = datetime.strptime(text, fmt).replace(tzinfo=timezone.utc)
+            return dt.replace(microsecond=0).isoformat()
+        except ValueError:
+            continue
+    return utc_now_iso()
+
+
 def decode_json_escaped_text(value: str) -> str:
     try:
         return json.loads(f'"{value}"')
@@ -1149,6 +1165,100 @@ def fetch_yelp_careers_jobs(company: str, source: dict[str, Any], session: reque
     return jobs
 
 
+def fetch_amazon_jobs(company: str, source: dict[str, Any], session: requests.Session) -> list[JobPosting]:
+    endpoint = str(source.get("endpoint", "https://www.amazon.jobs/en/search.json")).strip()
+    query = str(source.get("q", source.get("search_text", ""))).strip()
+    loc_query = str(source.get("loc_query", source.get("location", "Canada"))).strip() or "Canada"
+    country = str(source.get("country", "CAN")).strip() or "CAN"
+    limit = int(source.get("limit", 20))
+    max_pages = int(source.get("max_pages", 5))
+    keyword_list = to_keyword_list(source.get("title_keywords"))
+    exclude_keyword_list = to_keyword_list(source.get("exclude_title_keywords"))
+    experience_threshold = to_optional_int(source.get("exclude_required_experience_years_at_or_above"))
+    extra_params = source.get("params") if isinstance(source.get("params"), dict) else {}
+    if not endpoint:
+        raise ValueError(f"Amazon source for {company} is missing endpoint.")
+    if limit < 1:
+        limit = 20
+    if max_pages < 1:
+        max_pages = 1
+
+    headers = {"Accept-Encoding": "identity", "User-Agent": "Mozilla/5.0"}
+    jobs: list[JobPosting] = []
+    for page in range(max_pages):
+        offset = page * limit
+        params: dict[str, Any] = {"offset": offset, "result_limit": limit, "loc_query": loc_query, "country": country}
+        if query:
+            params["base_query"] = query
+        params.update(extra_params)
+
+        resp = session.get(endpoint, params=params, headers=headers, timeout=30)
+        resp.raise_for_status()
+        payload = resp.json()
+        items = payload.get("jobs") or []
+        if not items:
+            break
+
+        total_hits = to_optional_int(payload.get("hits"))
+        for item in items:
+            title = str(item.get("title", "Untitled")).strip()
+            if not title_matches_keywords(title, keyword_list):
+                continue
+            if title_has_excluded_keywords(title, exclude_keyword_list):
+                continue
+
+            location_parts = [
+                str(item.get("location", "")).strip(),
+                str(item.get("city", "")).strip(),
+                str(item.get("state", "")).strip(),
+                str(item.get("country_code", "")).strip(),
+            ]
+            location_text = ", ".join(part for part in location_parts if part)
+            country_code = str(item.get("country_code", "")).strip().upper()
+            if not is_canada_location(location_text) and country_code != "CAN":
+                continue
+
+            details_text = flatten_text(
+                [
+                    item.get("description"),
+                    item.get("description_short"),
+                    item.get("basic_qualifications"),
+                    item.get("preferred_qualifications"),
+                ]
+            )
+            if requires_experience_at_or_above(details_text, experience_threshold):
+                continue
+
+            job_id = str(item.get("id_icims") or item.get("id") or "").strip()
+            if not job_id:
+                unique_seed = f"{company}|{title}|{location_text}|{item.get('job_path')}"
+                job_id = hashlib.sha1(unique_seed.encode("utf-8")).hexdigest()[:16]
+
+            job_path = str(item.get("job_path", "")).strip()
+            fallback_url = str(item.get("url_next_step", "")).strip()
+            job_url = urljoin("https://www.amazon.jobs", job_path) if job_path else fallback_url or endpoint
+
+            updated_at = parse_amazon_posted_date_to_utc_iso(str(item.get("posted_date", "")).strip())
+            jobs.append(
+                JobPosting(
+                    unique_id=f"amazon:{job_id}",
+                    source="amazon_jobs",
+                    company=company,
+                    title=title,
+                    location=location_text or "Unknown",
+                    url=job_url,
+                    updated_at=updated_at,
+                )
+            )
+
+        if len(items) < limit:
+            break
+        if total_hits is not None and (offset + len(items)) >= total_hits:
+            break
+
+    return jobs
+
+
 def read_json_file(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")
@@ -1444,6 +1554,26 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
                 all_jobs.extend(jobs)
                 logging.info("Yelp       %-20s -> %d Canada jobs", company, len(jobs))
                 return
+            if source_name == "amazon_jobs":
+                jobs = fetch_amazon_jobs(
+                    company,
+                    {
+                        "endpoint": identifier,
+                        "q": source.get("q", source.get("search_text", "")),
+                        "loc_query": source.get("loc_query", source.get("location", "Canada")),
+                        "country": source.get("country", "CAN"),
+                        "limit": source.get("limit", 20),
+                        "max_pages": source.get("max_pages", 5),
+                        "params": source.get("params", {}),
+                        "title_keywords": title_keywords or [],
+                        "exclude_title_keywords": exclude_title_keywords or [],
+                        "exclude_required_experience_years_at_or_above": experience_threshold,
+                    },
+                    session,
+                )
+                all_jobs.extend(jobs)
+                logging.info("Amazon     %-20s -> %d Canada jobs", company, len(jobs))
+                return
         except requests.HTTPError as exc:
             code = exc.response.status_code if exc.response is not None else "unknown"
             logging.warning("%s fetch failed for %s (%s): HTTP %s", source_name.title(), company, identifier, code)
@@ -1594,6 +1724,24 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
             source_config=source,
         )
 
+    for source in sources.get("amazon_jobs", []):
+        company = str(source.get("company", "Amazon")).strip() or "Amazon"
+        endpoint = str(source.get("endpoint", "https://www.amazon.jobs/en/search.json")).strip()
+        title_keywords = to_keyword_list(source.get("title_keywords"))
+        exclude_title_keywords = effective_excluded_keywords(source)
+        experience_threshold = effective_experience_threshold(source)
+        if not endpoint:
+            continue
+        fetch_by_source(
+            "amazon_jobs",
+            company,
+            endpoint,
+            title_keywords=title_keywords,
+            exclude_title_keywords=exclude_title_keywords,
+            experience_threshold=experience_threshold,
+            source_config=source,
+        )
+
     for source in sources.get("career_pages", []):
         company = str(source.get("company", "")).strip()
         url = str(source.get("url", "")).strip()
@@ -1654,6 +1802,9 @@ def parse_source_from_career_page(url: str) -> tuple[str, str] | None:
 
     if "uber.com" in host and "/careers/list" in parsed.path:
         return ("uber_careers", url)
+
+    if "amazon.jobs" in host and "/search" in parsed.path:
+        return ("amazon_jobs", "https://www.amazon.jobs/en/search.json")
 
     return None
 

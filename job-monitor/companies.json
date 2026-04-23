@@ -152,6 +152,18 @@
         "title_keywords": ["software developer", "software engineer", "developer", "web developer", "frontend developer", "frontend engineer", "front-end developer", "front-end engineer", "backend developer", "backend engineer", "back-end developer", "back-end engineer", "full stack", "full-stack", "ai developer", "ai engineer", "machine learning engineer", "ml engineer", "llm"]
       }
     ],
+    "amazon_jobs": [
+      {
+        "company": "Amazon",
+        "endpoint": "https://www.amazon.jobs/en/search.json",
+        "q": "software engineer",
+        "loc_query": "Canada",
+        "country": "CAN",
+        "limit": 20,
+        "max_pages": 5,
+        "title_keywords": ["software developer", "software engineer", "software development engineer", "software dev engineer", "sde", "developer", "web developer", "frontend developer", "frontend engineer", "front-end developer", "front-end engineer", "backend developer", "backend engineer", "back-end developer", "back-end engineer", "full stack", "full-stack", "ai developer", "ai engineer", "machine learning engineer", "ml engineer", "llm"]
+      }
+    ],
     "lever": [
       {
         "company": "Spotify",
