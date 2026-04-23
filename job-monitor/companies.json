@@ -164,6 +164,27 @@
         "title_keywords": ["software developer", "software engineer", "software development engineer", "software dev engineer", "sde", "developer", "web developer", "frontend developer", "frontend engineer", "front-end developer", "front-end engineer", "backend developer", "backend engineer", "back-end developer", "back-end engineer", "full stack", "full-stack", "ai developer", "ai engineer", "machine learning engineer", "ml engineer", "llm"]
       }
     ],
+    "ashby": [
+      {
+        "company": "Confluent",
+        "board": "confluent",
+        "endpoint": "https://jobs.ashbyhq.com/confluent",
+        "title_keywords": ["software developer", "software engineer", "software development engineer", "software dev engineer", "sde", "developer", "web developer", "frontend developer", "frontend engineer", "front-end developer", "front-end engineer", "backend developer", "backend engineer", "back-end developer", "back-end engineer", "full stack", "full-stack", "ai developer", "ai engineer", "machine learning engineer", "ml engineer", "llm"]
+      }
+    ],
+    "ibm_careers_api": [
+      {
+        "company": "IBM",
+        "endpoint": "https://www-api.ibm.com/search/api/v1-1/ibmcom/appid/careers/responseFormat/json",
+        "scope": "careers2",
+        "app_id": "careers",
+        "q": "software developer canada",
+        "limit": 20,
+        "max_pages": 5,
+        "sort_by": "dcdate",
+        "title_keywords": ["software developer", "software engineer", "software development engineer", "software dev engineer", "sde", "developer", "web developer", "frontend developer", "frontend engineer", "front-end developer", "front-end engineer", "backend developer", "backend engineer", "back-end developer", "back-end engineer", "full stack", "full-stack", "ai developer", "ai engineer", "machine learning engineer", "ml engineer", "llm"]
+      }
+    ],
     "lever": [
       {
         "company": "Spotify",

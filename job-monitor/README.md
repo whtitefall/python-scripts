@@ -12,6 +12,8 @@
 - AMD（Jibe / iCIMS API）
 - Yelp（`yelp.careers` 搜索页内嵌职位数据 + iCIMS apply URL）
 - Amazon（`amazon.jobs/en/search.json`）
+- Confluent（Ashby，`jobs.ashbyhq.com/confluent`）
+- IBM（`www-api.ibm.com` careers 搜索 API）
 - Instacart（Greenhouse）
 - Robinhood（Greenhouse）
 - DoorDash（Greenhouse）
@@ -55,6 +57,8 @@ $env:SMTP_PASSWORD="你的16位AppPassword"
 - `sources.jibe`：Jibe / iCIMS API（如 AMD）
 - `sources.yelp_careers`：Yelp Careers（Phenom + iCIMS）
 - `sources.amazon_jobs`：Amazon Jobs JSON API
+- `sources.ashby`：Ashby Jobs（如 Confluent）
+- `sources.ibm_careers_api`：IBM Careers Search API
 - `sources.greenhouse`：Greenhouse API
 - `sources.lever`：Lever API
 - 每个源都支持 `title_keywords` 进行标题二次过滤

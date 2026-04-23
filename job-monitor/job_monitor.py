@@ -63,6 +63,7 @@ WORKDAY_CXS_PATTERN = re.compile(
     r"^https://[^/]+/wday/cxs/(?P<tenant>[^/]+)/(?P<site>[^/]+)/jobs/?$",
     re.IGNORECASE,
 )
+IBM_JOB_ID_PATTERN = re.compile(r"[?&]jobId=(\d+)", re.IGNORECASE)
 YELP_CAREERS_JOB_PATTERN = re.compile(
     r'"reqId":"(?P<req_id>\d+)".+?"title":"(?P<title>[^"]+)".+?"postedDate":"(?P<posted_date>[^"]+)".+?'
     r'"dateCreated":"(?P<created_date>[^"]+)".+?"applyUrl":"(?P<apply_url>https:(?:\/\/|\\\/\\\/)cancareers-yelp\.icims\.com[^"]+\/job)".+?'
@@ -225,6 +226,48 @@ def format_uber_location_item(value: Any) -> str:
     country = str(value.get("countryName") or value.get("country") or "").strip()
     parts = [part for part in [city, region, country] if part]
     return ", ".join(parts)
+
+
+def docattributes_to_dict(values: Any) -> dict[str, str]:
+    output: dict[str, str] = {}
+    if not isinstance(values, list):
+        return output
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        for key, value in item.items():
+            if key not in output:
+                output[key] = str(value)
+    return output
+
+
+def extract_json_array_from_html(text: str, key: str) -> list[dict[str, Any]]:
+    marker = f'"{key}":['
+    start = text.find(marker)
+    if start < 0:
+        return []
+    array_start = start + len(marker) - 1
+    depth = 0
+    array_end = -1
+    for idx in range(array_start, len(text)):
+        ch = text[idx]
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+            if depth == 0:
+                array_end = idx
+                break
+    if array_end < 0:
+        return []
+    array_text = text[array_start : array_end + 1]
+    try:
+        parsed = json.loads(array_text)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [item for item in parsed if isinstance(item, dict)]
 
 
 def sleep_with_jitter(base_delay: float, jitter: float) -> None:
@@ -1259,6 +1302,183 @@ def fetch_amazon_jobs(company: str, source: dict[str, Any], session: requests.Se
     return jobs
 
 
+def fetch_ashby_jobs(company: str, source: dict[str, Any], session: requests.Session) -> list[JobPosting]:
+    board = str(source.get("board", "")).strip()
+    endpoint = str(source.get("endpoint", f"https://jobs.ashbyhq.com/{board}" if board else "")).strip()
+    if not endpoint:
+        raise ValueError(f"Ashby source for {company} is missing endpoint or board.")
+    board_name = board or endpoint.rstrip("/").split("/")[-1]
+    title_keywords = to_keyword_list(source.get("title_keywords"))
+    exclude_title_keywords = to_keyword_list(source.get("exclude_title_keywords"))
+    experience_threshold = to_optional_int(source.get("exclude_required_experience_years_at_or_above"))
+
+    resp = session.get(endpoint, timeout=30)
+    resp.raise_for_status()
+    postings = extract_json_array_from_html(resp.text, "jobPostings")
+    if not postings:
+        return []
+
+    jobs: list[JobPosting] = []
+    for item in postings:
+        if not bool(item.get("isListed", True)):
+            continue
+        title = str(item.get("title", "Untitled")).strip()
+        if not title_matches_keywords(title, title_keywords):
+            continue
+        if title_has_excluded_keywords(title, exclude_title_keywords):
+            continue
+
+        locations: list[str] = []
+        primary_location = str(item.get("locationName", "")).strip()
+        if primary_location:
+            locations.append(primary_location)
+        secondary_locations = item.get("secondaryLocations")
+        if isinstance(secondary_locations, list):
+            for secondary in secondary_locations:
+                if not isinstance(secondary, dict):
+                    continue
+                secondary_name = str(
+                    secondary.get("locationExternalName") or secondary.get("locationName") or secondary.get("name") or ""
+                ).strip()
+                if secondary_name:
+                    locations.append(secondary_name)
+        location_text = "; ".join(dict.fromkeys(locations))
+        if not is_canada_location(location_text):
+            continue
+
+        details_text = flatten_text(
+            [
+                title,
+                item.get("teamName"),
+                item.get("departmentName"),
+                item.get("compensationTierSummary"),
+            ]
+        )
+        if requires_experience_at_or_above(details_text, experience_threshold):
+            continue
+
+        posting_id = str(item.get("id") or item.get("jobId") or "").strip()
+        if not posting_id:
+            unique_seed = f"{company}|{title}|{location_text}"
+            posting_id = hashlib.sha1(unique_seed.encode("utf-8")).hexdigest()[:16]
+        job_url = f"https://jobs.ashbyhq.com/{board_name}/{posting_id}"
+        published_raw = str(item.get("publishedDate") or item.get("updatedAt") or "").strip()
+        updated_at = parse_datetime_to_utc_iso(published_raw)
+        jobs.append(
+            JobPosting(
+                unique_id=f"ashby:{board_name}:{posting_id}",
+                source="ashby",
+                company=company,
+                title=title,
+                location=location_text or "Unknown",
+                url=job_url,
+                updated_at=updated_at,
+            )
+        )
+    return jobs
+
+
+def fetch_ibm_careers_jobs(company: str, source: dict[str, Any], session: requests.Session) -> list[JobPosting]:
+    endpoint = str(
+        source.get(
+            "endpoint",
+            "https://www-api.ibm.com/search/api/v1-1/ibmcom/appid/careers/responseFormat/json",
+        )
+    ).strip()
+    if not endpoint:
+        raise ValueError(f"IBM source for {company} is missing endpoint.")
+    scope = str(source.get("scope", "careers2")).strip() or "careers2"
+    app_id = str(source.get("app_id", "careers")).strip() or "careers"
+    query = str(source.get("q", source.get("search_text", ""))).strip()
+    limit = int(source.get("limit", 20))
+    max_pages = int(source.get("max_pages", 5))
+    sort_by = str(source.get("sort_by", "dcdate")).strip() or "dcdate"
+    title_keywords = to_keyword_list(source.get("title_keywords"))
+    exclude_title_keywords = to_keyword_list(source.get("exclude_title_keywords"))
+    experience_threshold = to_optional_int(source.get("exclude_required_experience_years_at_or_above"))
+    if limit < 1:
+        limit = 20
+    if max_pages < 1:
+        max_pages = 1
+
+    jobs: list[JobPosting] = []
+    for page_index in range(max_pages):
+        offset = page_index * limit
+        params = {
+            "scope": scope,
+            "appid": app_id,
+            "rmdt": "ALL",
+            "sortby": sort_by,
+            "query": query,
+            "fr": str(offset),
+            "nr": str(limit),
+            "page": str(page_index + 1),
+        }
+        resp = session.get(
+            endpoint,
+            params=params,
+            headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0"},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+        search_results = ((payload.get("resultset") or {}).get("searchresults") or {})
+        items = search_results.get("searchresultlist") or []
+        if not isinstance(items, list) or not items:
+            break
+
+        total_results = to_optional_int(search_results.get("totalresults"))
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title", "Untitled")).strip()
+            if not title_matches_keywords(title, title_keywords):
+                continue
+            if title_has_excluded_keywords(title, exclude_title_keywords):
+                continue
+
+            attrs = docattributes_to_dict(item.get("docattributes"))
+            location = (
+                str(attrs.get("field_keyword_19", "")).strip()
+                or str(attrs.get("city", "")).strip()
+                or str(attrs.get("location", "")).strip()
+            )
+            country_code = str(attrs.get("country", "")).strip().upper()
+            location_hint = f"{location} {country_code}".strip()
+            if not is_canada_location(location_hint) and country_code not in {"CA", "CAN"}:
+                continue
+
+            details_text = flatten_text([item.get("description"), item.get("summary"), attrs])
+            if requires_experience_at_or_above(details_text, experience_threshold):
+                continue
+
+            job_url = str(item.get("url", "")).strip() or "https://www.ibm.com/careers/search"
+            match = IBM_JOB_ID_PATTERN.search(job_url)
+            job_id = match.group(1) if match else str(item.get("id", "")).strip()
+            if not job_id:
+                unique_seed = f"{company}|{title}|{location}|{job_url}"
+                job_id = hashlib.sha1(unique_seed.encode("utf-8")).hexdigest()[:16]
+            updated_raw = str(attrs.get("dcdate") or attrs.get("effectivedate") or "").strip()
+            updated_at = parse_datetime_to_utc_iso(updated_raw) if updated_raw else utc_now_iso()
+            jobs.append(
+                JobPosting(
+                    unique_id=f"ibm:{job_id}",
+                    source="ibm_careers_api",
+                    company=company,
+                    title=title,
+                    location=location or "Canada",
+                    url=job_url,
+                    updated_at=updated_at,
+                )
+            )
+
+        if len(items) < limit:
+            break
+        if total_results is not None and offset + len(items) >= total_results:
+            break
+    return jobs
+
+
 def read_json_file(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")
@@ -1574,6 +1794,41 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
                 all_jobs.extend(jobs)
                 logging.info("Amazon     %-20s -> %d Canada jobs", company, len(jobs))
                 return
+            if source_name == "ashby":
+                jobs = fetch_ashby_jobs(
+                    company,
+                    {
+                        "board": source.get("board", ""),
+                        "endpoint": identifier,
+                        "title_keywords": title_keywords or [],
+                        "exclude_title_keywords": exclude_title_keywords or [],
+                        "exclude_required_experience_years_at_or_above": experience_threshold,
+                    },
+                    session,
+                )
+                all_jobs.extend(jobs)
+                logging.info("Ashby      %-20s -> %d Canada jobs", company, len(jobs))
+                return
+            if source_name == "ibm_careers_api":
+                jobs = fetch_ibm_careers_jobs(
+                    company,
+                    {
+                        "endpoint": identifier,
+                        "scope": source.get("scope", "careers2"),
+                        "app_id": source.get("app_id", "careers"),
+                        "q": source.get("q", source.get("search_text", "")),
+                        "limit": source.get("limit", 20),
+                        "max_pages": source.get("max_pages", 5),
+                        "sort_by": source.get("sort_by", "dcdate"),
+                        "title_keywords": title_keywords or [],
+                        "exclude_title_keywords": exclude_title_keywords or [],
+                        "exclude_required_experience_years_at_or_above": experience_threshold,
+                    },
+                    session,
+                )
+                all_jobs.extend(jobs)
+                logging.info("IBM API    %-20s -> %d Canada jobs", company, len(jobs))
+                return
         except requests.HTTPError as exc:
             code = exc.response.status_code if exc.response is not None else "unknown"
             logging.warning("%s fetch failed for %s (%s): HTTP %s", source_name.title(), company, identifier, code)
@@ -1742,6 +1997,50 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
             source_config=source,
         )
 
+    for source in sources.get("ashby", []):
+        company = str(source.get("company", "Ashby")).strip() or "Ashby"
+        endpoint = str(source.get("endpoint", "")).strip()
+        board = str(source.get("board", "")).strip()
+        if not endpoint and board:
+            endpoint = f"https://jobs.ashbyhq.com/{board}"
+        title_keywords = to_keyword_list(source.get("title_keywords"))
+        exclude_title_keywords = effective_excluded_keywords(source)
+        experience_threshold = effective_experience_threshold(source)
+        if not endpoint:
+            continue
+        fetch_by_source(
+            "ashby",
+            company,
+            endpoint,
+            title_keywords=title_keywords,
+            exclude_title_keywords=exclude_title_keywords,
+            experience_threshold=experience_threshold,
+            source_config=source,
+        )
+
+    for source in sources.get("ibm_careers_api", []):
+        company = str(source.get("company", "IBM")).strip() or "IBM"
+        endpoint = str(
+            source.get(
+                "endpoint",
+                "https://www-api.ibm.com/search/api/v1-1/ibmcom/appid/careers/responseFormat/json",
+            )
+        ).strip()
+        title_keywords = to_keyword_list(source.get("title_keywords"))
+        exclude_title_keywords = effective_excluded_keywords(source)
+        experience_threshold = effective_experience_threshold(source)
+        if not endpoint:
+            continue
+        fetch_by_source(
+            "ibm_careers_api",
+            company,
+            endpoint,
+            title_keywords=title_keywords,
+            exclude_title_keywords=exclude_title_keywords,
+            experience_threshold=experience_threshold,
+            source_config=source,
+        )
+
     for source in sources.get("career_pages", []):
         company = str(source.get("company", "")).strip()
         url = str(source.get("url", "")).strip()
@@ -1805,6 +2104,12 @@ def parse_source_from_career_page(url: str) -> tuple[str, str] | None:
 
     if "amazon.jobs" in host and "/search" in parsed.path:
         return ("amazon_jobs", "https://www.amazon.jobs/en/search.json")
+
+    if "ashbyhq.com" in host and path_parts:
+        return ("ashby", f"https://jobs.ashbyhq.com/{path_parts[0]}")
+
+    if "ibm.com" in host and "/careers/search" in parsed.path:
+        return ("ibm_careers_api", "https://www-api.ibm.com/search/api/v1-1/ibmcom/appid/careers/responseFormat/json")
 
     return None
 
