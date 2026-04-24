@@ -1,0 +1,79 @@
+name: Content Updates Monitor
+
+on:
+  workflow_dispatch:
+    inputs:
+      send_initial_snapshot:
+        description: "Send current updates on first run"
+        required: false
+        default: "false"
+  schedule:
+    - cron: "43 * * * *"
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - ".github/workflows/content-updates.yml"
+      - "content-monitor/**"
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: content-updates-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      STATE_FILE: content-monitor/.content_monitor_state.json
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore monitor state
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.STATE_FILE }}
+          key: content-updates-state-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            content-updates-state-${{ github.ref_name }}-
+            content-updates-state-
+
+      - name: Ensure state directory exists
+        shell: bash
+        run: |
+          mkdir -p "$(dirname "${STATE_FILE}")"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r content-monitor/requirements.txt
+
+      - name: Run monitor once
+        shell: bash
+        run: |
+          EXTRA=""
+          if [ "${{ github.event.inputs.send_initial_snapshot || 'false' }}" = "true" ]; then
+            EXTRA="--send-initial-snapshot"
+          fi
+          python content-monitor/content_monitor.py --config content-monitor/sources.json --state "${STATE_FILE}" --once ${EXTRA}
+
+      - name: Save monitor state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.STATE_FILE }}
+          key: content-updates-state-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+

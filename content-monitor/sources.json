@@ -1,0 +1,24 @@
+{
+  "poll_interval_minutes": 60,
+  "max_post_age_days_for_email": 7,
+  "request_delay_seconds": 2,
+  "request_jitter_seconds": 0.5,
+  "recipient_email": "whtitefall@gmail.com",
+  "smtp_host": "smtp.gmail.com",
+  "smtp_port": 465,
+  "sources": {
+    "rss": [
+      {
+        "name": "ByteByteGo Blog",
+        "url": "https://blog.bytebytego.com/feed"
+      }
+    ],
+    "youtube": [
+      {
+        "name": "laoliwanqian",
+        "channel_url": "https://www.youtube.com/@%E8%80%81%E6%9D%8E%E7%8E%A9%E9%92%B1"
+      }
+    ]
+  }
+}
+
