@@ -16,6 +16,7 @@
 - Confluent（Ashby，`jobs.ashbyhq.com/confluent`）
 - IBM（`www-api.ibm.com` careers 搜索 API）
 - Instacart（Greenhouse）
+- Affirm（Greenhouse）
 - Robinhood（Greenhouse）
 - DoorDash（Greenhouse）
 - Pinterest（Greenhouse）
