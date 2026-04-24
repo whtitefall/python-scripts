@@ -108,6 +108,14 @@
         "limit": 20,
         "max_pages": 5,
         "title_keywords": ["software developer", "software engineer", "developer", "web developer", "frontend developer", "frontend engineer", "front-end developer", "front-end engineer", "backend developer", "backend engineer", "back-end developer", "back-end engineer", "full stack", "full-stack", "ai developer", "ai engineer", "machine learning engineer", "ml engineer", "llm"]
+      },
+      {
+        "company": "Autodesk",
+        "endpoint": "https://autodesk.wd1.myworkdayjobs.com/wday/cxs/autodesk/Ext/jobs",
+        "q": "software developer",
+        "limit": 20,
+        "max_pages": 5,
+        "title_keywords": ["software developer", "software engineer", "software development engineer", "software dev engineer", "sde", "developer", "web developer", "frontend developer", "frontend engineer", "front-end developer", "front-end engineer", "backend developer", "backend engineer", "back-end developer", "back-end engineer", "full stack", "full-stack", "ai developer", "ai engineer", "machine learning engineer", "ml engineer", "llm"]
       }
     ],
     "jibe": [

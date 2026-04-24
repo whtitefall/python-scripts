@@ -9,6 +9,7 @@
 - Qualcomm Careers（`careers.qualcomm.com/api/pcsx/search`）
 - Workday（官方 Workday CXS）
 - Qualcomm（Workday CXS，当前可能返回 0 职位；作为冗余源保留）
+- Autodesk（Workday CXS）
 - AMD（Jibe / iCIMS API）
 - Yelp（`yelp.careers` 搜索页内嵌职位数据 + iCIMS apply URL）
 - Amazon（`amazon.jobs/en/search.json`）
