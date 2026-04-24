@@ -17,6 +17,7 @@
 - IBM（`www-api.ibm.com` careers 搜索 API）
 - Instacart（Greenhouse）
 - Affirm（Greenhouse）
+- Okta（Greenhouse）
 - Robinhood（Greenhouse）
 - DoorDash（Greenhouse）
 - Pinterest（Greenhouse）
