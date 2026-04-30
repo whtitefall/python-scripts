@@ -70,6 +70,18 @@ YELP_CAREERS_JOB_PATTERN = re.compile(
     r'"location":"(?P<location>[^"]+)"',
     re.DOTALL,
 )
+INTUIT_SEARCH_DEFAULT_URL = "https://jobs.intuit.com/search-jobs?acm=68357&l=Canada&orgIds=27595"
+INTUIT_JOB_CARD_PATTERN = re.compile(
+    r'<a href="(?P<href>/job/[^"]+/\d+/\d+)"[^>]*data-title="(?P<title>[^"]+)"[^>]*>.*?'
+    r'<span class="job-location">(?P<location>.*?)</span>',
+    re.IGNORECASE | re.DOTALL,
+)
+INTUIT_TOTAL_PAGES_PATTERN = re.compile(r'data-total-pages="(?P<total_pages>\d+)"', re.IGNORECASE)
+INTUIT_JOBPOSTING_JSONLD_PATTERN = re.compile(
+    r"<script[^>]*type=[\"']application/ld\\+json[\"'][^>]*>(?P<payload>.*?)</script>",
+    re.IGNORECASE | re.DOTALL,
+)
+INTUIT_DATE_ONLY_PATTERN = re.compile(r"^(?P<year>\d{4})-(?P<month>\d{1,2})-(?P<day>\d{1,2})$")
 GITHUB_MODELS_INFERENCE_URL = "https://models.github.ai/inference/chat/completions"
 EXPERIENCE_WORD_TO_NUM = {
     "zero": 0,
@@ -206,6 +218,31 @@ def parse_amazon_posted_date_to_utc_iso(value: str) -> str:
             return dt.replace(microsecond=0).isoformat()
         except ValueError:
             continue
+    return utc_now_iso()
+
+
+def parse_intuit_date_to_utc_iso(value: str) -> str:
+    text = (value or "").strip()
+    if not text:
+        return utc_now_iso()
+
+    parsed_iso = parse_datetime_iso(text)
+    if parsed_iso is not None:
+        return parsed_iso.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+
+    match = INTUIT_DATE_ONLY_PATTERN.match(text)
+    if match:
+        try:
+            dt = datetime(
+                int(match.group("year")),
+                int(match.group("month")),
+                int(match.group("day")),
+                tzinfo=timezone.utc,
+            )
+            return dt.replace(microsecond=0).isoformat()
+        except ValueError:
+            pass
+
     return utc_now_iso()
 
 
@@ -1130,6 +1167,136 @@ def fetch_uber_careers_jobs(company: str, source: dict[str, Any], session: reque
     return jobs
 
 
+def extract_intuit_jobposting_data(page_text: str) -> tuple[str, str]:
+    for match in INTUIT_JOBPOSTING_JSONLD_PATTERN.finditer(page_text):
+        payload_text = html.unescape(match.group("payload") or "").strip()
+        if not payload_text:
+            continue
+
+        parsed_payload: Any
+        try:
+            parsed_payload = json.loads(payload_text)
+        except json.JSONDecodeError:
+            parsed_payload = parse_json_object_from_text(payload_text)
+
+        candidates: list[dict[str, Any]] = []
+        if isinstance(parsed_payload, dict):
+            candidates = [parsed_payload]
+        elif isinstance(parsed_payload, list):
+            candidates = [item for item in parsed_payload if isinstance(item, dict)]
+
+        for item in candidates:
+            if str(item.get("@type", "")).strip().lower() != "jobposting":
+                continue
+            date_posted = str(item.get("datePosted", "")).strip()
+            description = flatten_text(item.get("description"))
+            if date_posted or description:
+                return date_posted, description
+
+    return "", ""
+
+
+def fetch_intuit_careers_jobs(company: str, source: dict[str, Any], session: requests.Session) -> list[JobPosting]:
+    endpoint = str(source.get("endpoint", INTUIT_SEARCH_DEFAULT_URL)).strip() or INTUIT_SEARCH_DEFAULT_URL
+    query = str(source.get("q", source.get("search_text", ""))).strip()
+    max_pages = int(source.get("max_pages", 6))
+    title_keywords = to_keyword_list(source.get("title_keywords"))
+    exclude_title_keywords = to_keyword_list(source.get("exclude_title_keywords"))
+    experience_threshold = to_optional_int(source.get("exclude_required_experience_years_at_or_above"))
+    request_headers = {"User-Agent": "Mozilla/5.0", "Accept-Language": "en-US,en;q=0.9"}
+    if max_pages < 1:
+        max_pages = 1
+
+    jobs: list[JobPosting] = []
+    seen_ids: set[str] = set()
+    total_pages = max_pages
+    parsed_endpoint = urlparse(endpoint)
+
+    for page in range(1, max_pages + 1):
+        if parsed_endpoint.query:
+            page_url = f"{endpoint}&p={page}"
+        else:
+            page_url = f"{endpoint}?p={page}"
+        if query:
+            page_url += "&k=" + requests.utils.quote(query)
+
+        resp = session.get(page_url, headers=request_headers, timeout=30)
+        resp.raise_for_status()
+        page_text = resp.text
+
+        if page == 1:
+            total_match = INTUIT_TOTAL_PAGES_PATTERN.search(page_text)
+            if total_match:
+                parsed_total = to_optional_int(total_match.group("total_pages"))
+                if parsed_total and parsed_total > 0:
+                    total_pages = min(max_pages, parsed_total)
+
+        matches = list(INTUIT_JOB_CARD_PATTERN.finditer(page_text))
+        if not matches:
+            break
+
+        new_on_page = 0
+        for match in matches:
+            href = html.unescape((match.group("href") or "").strip())
+            title = normalize_html_text(html.unescape(match.group("title") or "Untitled"))
+            location = normalize_html_text(html.unescape(match.group("location") or "Unknown"))
+            if not href or not title:
+                continue
+            if not is_canada_location(location):
+                continue
+            if not title_matches_keywords(title, title_keywords):
+                continue
+            if title_has_excluded_keywords(title, exclude_title_keywords):
+                continue
+
+            absolute_url = urljoin("https://jobs.intuit.com", href)
+            job_id_match = re.search(r"/(\d+)$", absolute_url)
+            if job_id_match:
+                job_id = job_id_match.group(1)
+            else:
+                unique_seed = f"{company}|{title}|{location}|{absolute_url}"
+                job_id = hashlib.sha1(unique_seed.encode("utf-8")).hexdigest()[:16]
+
+            if job_id in seen_ids:
+                continue
+
+            details_text = ""
+            date_posted_raw = ""
+            try:
+                details_resp = session.get(absolute_url, headers=request_headers, timeout=30)
+                details_resp.raise_for_status()
+                details_page = details_resp.text
+                date_posted_raw, details_text = extract_intuit_jobposting_data(details_page)
+                if not details_text:
+                    details_text = normalize_html_text(details_page)
+            except requests.RequestException:
+                details_text = ""
+
+            if requires_experience_at_or_above(details_text, experience_threshold):
+                continue
+
+            seen_ids.add(job_id)
+            new_on_page += 1
+            jobs.append(
+                JobPosting(
+                    unique_id=f"intuit:{job_id}",
+                    source="intuit_careers",
+                    company=company,
+                    title=title,
+                    location=location,
+                    url=absolute_url,
+                    updated_at=parse_intuit_date_to_utc_iso(date_posted_raw),
+                )
+            )
+
+        if page >= total_pages:
+            break
+        if new_on_page == 0:
+            break
+
+    return jobs
+
+
 def fetch_yelp_careers_jobs(company: str, source: dict[str, Any], session: requests.Session) -> list[JobPosting]:
     endpoint = str(source.get("endpoint", "https://www.yelp.careers/us/en/search-results")).strip()
     start_step = int(source.get("start_step", 10))
@@ -1829,6 +1996,22 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
                 all_jobs.extend(jobs)
                 logging.info("IBM API    %-20s -> %d Canada jobs", company, len(jobs))
                 return
+            if source_name == "intuit_careers":
+                jobs = fetch_intuit_careers_jobs(
+                    company,
+                    {
+                        "endpoint": identifier,
+                        "q": source.get("q", source.get("search_text", "")),
+                        "max_pages": source.get("max_pages", 6),
+                        "title_keywords": title_keywords or [],
+                        "exclude_title_keywords": exclude_title_keywords or [],
+                        "exclude_required_experience_years_at_or_above": experience_threshold,
+                    },
+                    session,
+                )
+                all_jobs.extend(jobs)
+                logging.info("Intuit     %-20s -> %d Canada jobs", company, len(jobs))
+                return
         except requests.HTTPError as exc:
             code = exc.response.status_code if exc.response is not None else "unknown"
             logging.warning("%s fetch failed for %s (%s): HTTP %s", source_name.title(), company, identifier, code)
@@ -2041,6 +2224,22 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
             source_config=source,
         )
 
+    for source in sources.get("intuit_careers", []):
+        company = str(source.get("company", "Intuit")).strip() or "Intuit"
+        endpoint = str(source.get("endpoint", INTUIT_SEARCH_DEFAULT_URL)).strip() or INTUIT_SEARCH_DEFAULT_URL
+        title_keywords = to_keyword_list(source.get("title_keywords"))
+        exclude_title_keywords = effective_excluded_keywords(source)
+        experience_threshold = effective_experience_threshold(source)
+        fetch_by_source(
+            "intuit_careers",
+            company,
+            endpoint,
+            title_keywords=title_keywords,
+            exclude_title_keywords=exclude_title_keywords,
+            experience_threshold=experience_threshold,
+            source_config=source,
+        )
+
     for source in sources.get("career_pages", []):
         company = str(source.get("company", "")).strip()
         url = str(source.get("url", "")).strip()
@@ -2110,6 +2309,9 @@ def parse_source_from_career_page(url: str) -> tuple[str, str] | None:
 
     if "ibm.com" in host and "/careers/search" in parsed.path:
         return ("ibm_careers_api", "https://www-api.ibm.com/search/api/v1-1/ibmcom/appid/careers/responseFormat/json")
+
+    if "jobs.intuit.com" in host and "/search-jobs" in parsed.path:
+        return ("intuit_careers", "https://jobs.intuit.com/search-jobs?acm=68357&l=Canada&orgIds=27595")
 
     return None
 

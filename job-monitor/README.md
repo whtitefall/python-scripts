@@ -15,6 +15,7 @@
 - Amazon（`amazon.jobs/en/search.json`）
 - Confluent（Ashby，`jobs.ashbyhq.com/confluent`）
 - IBM（`www-api.ibm.com` careers 搜索 API）
+- Intuit（`jobs.intuit.com/search-jobs` 页面解析 + 详情页 `datePosted`）
 - Instacart（Greenhouse）
 - Affirm（Greenhouse）
 - Okta（Greenhouse）
@@ -62,6 +63,7 @@ $env:SMTP_PASSWORD="你的16位AppPassword"
 - `sources.amazon_jobs`：Amazon Jobs JSON API
 - `sources.ashby`：Ashby Jobs（如 Confluent）
 - `sources.ibm_careers_api`：IBM Careers Search API
+- `sources.intuit_careers`：Intuit Careers 搜索页（TalentBrew）
 - `sources.greenhouse`：Greenhouse API
 - `sources.lever`：Lever API
 - 每个源都支持 `title_keywords` 进行标题二次过滤
