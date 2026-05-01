@@ -212,6 +212,14 @@
         "title_keywords": ["software developer", "software engineer", "software development engineer", "software dev engineer", "sde", "developer", "web developer", "frontend developer", "frontend engineer", "front-end developer", "front-end engineer", "backend developer", "backend engineer", "back-end developer", "back-end engineer", "full stack", "full-stack", "ai developer", "ai engineer", "machine learning engineer", "ml engineer", "llm"]
       }
     ],
+    "snowflake_careers": [
+      {
+        "company": "Snowflake",
+        "endpoint": "https://careers.snowflake.com/us/en/sitemap.xml",
+        "max_jobs_per_cycle": 120,
+        "title_keywords": ["software developer", "software engineer", "software development engineer", "software dev engineer", "sde", "developer", "web developer", "frontend developer", "frontend engineer", "front-end developer", "front-end engineer", "backend developer", "backend engineer", "back-end developer", "back-end engineer", "full stack", "full-stack", "ai developer", "ai engineer", "machine learning engineer", "ml engineer", "llm"]
+      }
+    ],
     "lever": [
       {
         "company": "Spotify",

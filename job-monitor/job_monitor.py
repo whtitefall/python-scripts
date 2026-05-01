@@ -16,7 +16,8 @@ from datetime import datetime, timezone
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlencode, urljoin, urlparse
+from urllib.parse import unquote, urlencode, urljoin, urlparse
+import xml.etree.ElementTree as ET
 
 import requests
 
@@ -82,6 +83,12 @@ INTUIT_JOBPOSTING_JSONLD_PATTERN = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 INTUIT_DATE_ONLY_PATTERN = re.compile(r"^(?P<year>\d{4})-(?P<month>\d{1,2})-(?P<day>\d{1,2})$")
+SNOWFLAKE_SITEMAP_DEFAULT_URL = "https://careers.snowflake.com/us/en/sitemap.xml"
+SNOWFLAKE_JOB_URL_MARKER = "/us/en/job/"
+SNOWFLAKE_JOBPOSTING_JSONLD_PATTERN = re.compile(
+    r"<script[^>]*type=[\"']application/ld\\+json[\"'][^>]*>(?P<payload>.*?)</script>",
+    re.IGNORECASE | re.DOTALL,
+)
 GITHUB_MODELS_INFERENCE_URL = "https://models.github.ai/inference/chat/completions"
 EXPERIENCE_WORD_TO_NUM = {
     "zero": 0,
@@ -244,6 +251,29 @@ def parse_intuit_date_to_utc_iso(value: str) -> str:
             pass
 
     return utc_now_iso()
+
+
+def parse_sitemap_urls(xml_text: str) -> list[tuple[str, str]]:
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return []
+
+    urls: list[tuple[str, str]] = []
+    if root.tag.endswith("urlset"):
+        entries = root.findall(".//{*}url")
+    elif root.tag.endswith("sitemapindex"):
+        entries = root.findall(".//{*}sitemap")
+    else:
+        entries = []
+
+    for item in entries:
+        loc = (item.findtext("{*}loc") or "").strip()
+        if not loc:
+            continue
+        lastmod = (item.findtext("{*}lastmod") or "").strip()
+        urls.append((loc, lastmod))
+    return urls
 
 
 def decode_json_escaped_text(value: str) -> str:
@@ -479,6 +509,23 @@ def parse_json_object_from_text(text: str) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     return parsed if isinstance(parsed, dict) else None
+
+
+def iter_json_dict_nodes(value: Any) -> list[dict[str, Any]]:
+    found: list[dict[str, Any]] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            found.append(node)
+            for child in node.values():
+                walk(child)
+            return
+        if isinstance(node, list):
+            for child in node:
+                walk(child)
+
+    walk(value)
+    return found
 
 
 def apply_ai_filter(
@@ -1194,6 +1241,210 @@ def extract_intuit_jobposting_data(page_text: str) -> tuple[str, str]:
                 return date_posted, description
 
     return "", ""
+
+
+def format_snowflake_location(node: Any) -> tuple[str, bool]:
+    parts: list[str] = []
+    has_canada = False
+
+    def add_part(text: str) -> None:
+        cleaned = normalize_html_text(str(text))
+        if cleaned:
+            parts.append(cleaned)
+
+    def walk(item: Any) -> None:
+        nonlocal has_canada
+        if isinstance(item, list):
+            for child in item:
+                walk(child)
+            return
+        if not isinstance(item, dict):
+            text = normalize_html_text(str(item))
+            if text:
+                parts.append(text)
+                if is_canada_location(text):
+                    has_canada = True
+            return
+
+        if str(item.get("@type", "")).strip().lower() == "country":
+            country_name = str(item.get("name") or item.get("addressCountry") or "").strip()
+            if country_name:
+                add_part(country_name)
+                if country_name.lower() in {"canada", "ca"}:
+                    has_canada = True
+
+        address = item.get("address")
+        if isinstance(address, dict):
+            city = str(address.get("addressLocality") or "").strip()
+            region = str(address.get("addressRegion") or "").strip()
+            country = str(address.get("addressCountry") or "").strip()
+            location_text = ", ".join(part for part in [city, region, country] if part)
+            if location_text:
+                add_part(location_text)
+            if country.lower() in {"canada", "ca"}:
+                has_canada = True
+
+        location_name = str(item.get("name") or item.get("location") or "").strip()
+        if location_name:
+            add_part(location_name)
+            if is_canada_location(location_name):
+                has_canada = True
+
+        country = str(item.get("country") or item.get("countryName") or "").strip()
+        if country:
+            add_part(country)
+            if country.lower() in {"canada", "ca"}:
+                has_canada = True
+
+        if not has_canada:
+            maybe_text = flatten_text(item)
+            if maybe_text and is_canada_location(maybe_text):
+                has_canada = True
+
+        for child in item.values():
+            if isinstance(child, (dict, list)):
+                walk(child)
+
+    walk(node)
+    deduped_parts = list(dict.fromkeys(part for part in parts if part))
+    location_text = "; ".join(deduped_parts)
+    if not has_canada and location_text:
+        has_canada = is_canada_location(location_text)
+    return location_text, has_canada
+
+
+def extract_snowflake_jobposting_data(page_text: str) -> tuple[str, str, str, str, bool]:
+    for match in SNOWFLAKE_JOBPOSTING_JSONLD_PATTERN.finditer(page_text):
+        payload_text = html.unescape(match.group("payload") or "").strip()
+        if not payload_text:
+            continue
+
+        parsed_payload: Any
+        try:
+            parsed_payload = json.loads(payload_text)
+        except json.JSONDecodeError:
+            parsed_payload = parse_json_object_from_text(payload_text)
+
+        for item in iter_json_dict_nodes(parsed_payload):
+            raw_type = item.get("@type")
+            if isinstance(raw_type, list):
+                type_names = {str(x).strip().lower() for x in raw_type}
+            else:
+                type_names = {str(raw_type or "").strip().lower()}
+            if "jobposting" not in type_names:
+                continue
+
+            title = normalize_html_text(str(item.get("title") or item.get("name") or "").strip())
+            date_posted = str(item.get("datePosted") or "").strip()
+            description = flatten_text(item.get("description"))
+            location_text, is_canada = format_snowflake_location(item.get("jobLocation"))
+
+            applicant_location = item.get("applicantLocationRequirements")
+            if applicant_location is not None:
+                applicant_location_text, applicant_is_canada = format_snowflake_location(applicant_location)
+                if applicant_is_canada:
+                    is_canada = True
+                if not location_text and applicant_location_text:
+                    location_text = applicant_location_text
+
+            return title, location_text, description, date_posted, is_canada
+
+    return "", "", "", "", False
+
+
+def fetch_snowflake_careers_jobs(company: str, source: dict[str, Any], session: requests.Session) -> list[JobPosting]:
+    endpoint = str(source.get("endpoint", SNOWFLAKE_SITEMAP_DEFAULT_URL)).strip() or SNOWFLAKE_SITEMAP_DEFAULT_URL
+    max_jobs_per_cycle = to_optional_int(source.get("max_jobs_per_cycle"))
+    if max_jobs_per_cycle is None or max_jobs_per_cycle <= 0:
+        max_jobs_per_cycle = 120
+
+    title_keywords = to_keyword_list(source.get("title_keywords"))
+    exclude_title_keywords = to_keyword_list(source.get("exclude_title_keywords"))
+    experience_threshold = to_optional_int(source.get("exclude_required_experience_years_at_or_above"))
+    request_headers = {"User-Agent": "Mozilla/5.0", "Accept-Language": "en-US,en;q=0.9"}
+
+    resp = session.get(endpoint, headers=request_headers, timeout=30)
+    resp.raise_for_status()
+    sitemap_urls = parse_sitemap_urls(resp.text)
+    if not sitemap_urls:
+        return []
+
+    job_entries: list[tuple[str, str]] = []
+    for loc, lastmod in sitemap_urls:
+        if SNOWFLAKE_JOB_URL_MARKER not in loc:
+            continue
+        job_entries.append((loc, lastmod))
+    if not job_entries:
+        return []
+    def snowflake_sort_key(entry: tuple[str, str]) -> tuple[int, float]:
+        parsed_lastmod = parse_datetime_iso(entry[1])
+        if parsed_lastmod is None:
+            return (1, 0.0)
+        return (0, -parsed_lastmod.timestamp())
+
+    job_entries.sort(key=snowflake_sort_key)
+
+    jobs: list[JobPosting] = []
+    seen_ids: set[str] = set()
+    inspected = 0
+
+    for job_url, lastmod in job_entries:
+        if inspected >= max_jobs_per_cycle:
+            break
+        inspected += 1
+
+        job_path = urlparse(job_url).path.strip("/")
+        path_parts = [part for part in job_path.split("/") if part]
+        job_key = ""
+        if "job" in path_parts:
+            job_index = path_parts.index("job")
+            if job_index + 1 < len(path_parts):
+                job_key = path_parts[job_index + 1].strip()
+        if not job_key:
+            job_key = hashlib.sha1(job_url.encode("utf-8")).hexdigest()[:20]
+        unique_id = f"snowflake:{job_key.lower()}"
+        if unique_id in seen_ids:
+            continue
+        seen_ids.add(unique_id)
+
+        try:
+            detail_resp = session.get(job_url, headers=request_headers, timeout=30)
+            detail_resp.raise_for_status()
+        except requests.RequestException:
+            continue
+
+        title, location_text, description_text, date_posted_raw, is_canada = extract_snowflake_jobposting_data(detail_resp.text)
+        if not title:
+            fallback_title = unquote(path_parts[-1].replace("-", " ")) if path_parts else ""
+            title = normalize_html_text(fallback_title) or "Untitled"
+        if not title_matches_keywords(title, title_keywords):
+            continue
+        if title_has_excluded_keywords(title, exclude_title_keywords):
+            continue
+        if not is_canada and not is_canada_location(location_text):
+            continue
+        if requires_experience_at_or_above(description_text, experience_threshold):
+            continue
+
+        updated_at = utc_now_iso()
+        if date_posted_raw:
+            updated_at = parse_intuit_date_to_utc_iso(date_posted_raw)
+        elif lastmod:
+            updated_at = parse_datetime_to_utc_iso(lastmod)
+
+        jobs.append(
+            JobPosting(
+                unique_id=unique_id,
+                source="snowflake_careers",
+                company=company,
+                title=title,
+                location=location_text or "Canada",
+                url=job_url,
+                updated_at=updated_at,
+            )
+        )
+
+    return jobs
 
 
 def fetch_intuit_careers_jobs(company: str, source: dict[str, Any], session: requests.Session) -> list[JobPosting]:
@@ -2012,6 +2263,21 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
                 all_jobs.extend(jobs)
                 logging.info("Intuit     %-20s -> %d Canada jobs", company, len(jobs))
                 return
+            if source_name == "snowflake_careers":
+                jobs = fetch_snowflake_careers_jobs(
+                    company,
+                    {
+                        "endpoint": identifier,
+                        "max_jobs_per_cycle": source.get("max_jobs_per_cycle", 120),
+                        "title_keywords": title_keywords or [],
+                        "exclude_title_keywords": exclude_title_keywords or [],
+                        "exclude_required_experience_years_at_or_above": experience_threshold,
+                    },
+                    session,
+                )
+                all_jobs.extend(jobs)
+                logging.info("Snowflake  %-20s -> %d Canada jobs", company, len(jobs))
+                return
         except requests.HTTPError as exc:
             code = exc.response.status_code if exc.response is not None else "unknown"
             logging.warning("%s fetch failed for %s (%s): HTTP %s", source_name.title(), company, identifier, code)
@@ -2240,6 +2506,22 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
             source_config=source,
         )
 
+    for source in sources.get("snowflake_careers", []):
+        company = str(source.get("company", "Snowflake")).strip() or "Snowflake"
+        endpoint = str(source.get("endpoint", SNOWFLAKE_SITEMAP_DEFAULT_URL)).strip() or SNOWFLAKE_SITEMAP_DEFAULT_URL
+        title_keywords = to_keyword_list(source.get("title_keywords"))
+        exclude_title_keywords = effective_excluded_keywords(source)
+        experience_threshold = effective_experience_threshold(source)
+        fetch_by_source(
+            "snowflake_careers",
+            company,
+            endpoint,
+            title_keywords=title_keywords,
+            exclude_title_keywords=exclude_title_keywords,
+            experience_threshold=experience_threshold,
+            source_config=source,
+        )
+
     for source in sources.get("career_pages", []):
         company = str(source.get("company", "")).strip()
         url = str(source.get("url", "")).strip()
@@ -2312,6 +2594,9 @@ def parse_source_from_career_page(url: str) -> tuple[str, str] | None:
 
     if "jobs.intuit.com" in host and "/search-jobs" in parsed.path:
         return ("intuit_careers", "https://jobs.intuit.com/search-jobs?acm=68357&l=Canada&orgIds=27595")
+
+    if "careers.snowflake.com" in host and "/search-results" in parsed.path:
+        return ("snowflake_careers", SNOWFLAKE_SITEMAP_DEFAULT_URL)
 
     return None
 
