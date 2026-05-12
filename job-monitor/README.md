@@ -17,6 +17,8 @@
 - IBM（`www-api.ibm.com` careers 搜索 API）
 - Intuit（`jobs.intuit.com/search-jobs` 页面解析 + 详情页 `datePosted`）
 - Snowflake（`careers.snowflake.com` sitemap + 职位页 `JobPosting` JSON-LD）
+- Lyft（Greenhouse）
+- Stripe（Greenhouse）
 - Instacart（Greenhouse）
 - Affirm（Greenhouse）
 - Okta（Greenhouse）
