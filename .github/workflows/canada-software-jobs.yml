@@ -36,8 +36,40 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       STATE_FILE: job-monitor/.job_monitor_state.json
     steps:
-      - name: Checkout
+      - name: Checkout (primary)
+        id: checkout_primary
+        continue-on-error: true
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout fallback (retry without credentials)
+        if: steps.checkout_primary.outcome != 'success'
+        shell: bash
+        run: |
+          echo "Primary checkout failed. Falling back to unauthenticated clone with retries."
+          shopt -s dotglob
+          rm -rf "${GITHUB_WORKSPACE:?}"/*
+
+          git init "${GITHUB_WORKSPACE}"
+          cd "${GITHUB_WORKSPACE}"
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+
+          success=0
+          for attempt in 1 2 3 4; do
+            echo "Fallback fetch attempt ${attempt}..."
+            if git fetch --depth=1 origin "${GITHUB_SHA}" && git checkout --detach FETCH_HEAD; then
+              success=1
+              break
+            fi
+            sleep $((attempt * 5))
+          done
+
+          if [ "${success}" -ne 1 ]; then
+            echo "Fallback checkout failed after retries."
+            exit 1
+          fi
 
       - name: Restore monitor state
         id: restore_state
