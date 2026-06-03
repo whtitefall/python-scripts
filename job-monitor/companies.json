@@ -72,6 +72,8 @@
         "company": "Qualcomm",
         "endpoint": "https://careers.qualcomm.com/api/pcsx/search",
         "domain": "qualcomm.com",
+        "base_url": "https://careers.qualcomm.com",
+        "source_label": "qualcomm_careers",
         "location": "Canada",
         "q": "software developer",
         "limit": 20,

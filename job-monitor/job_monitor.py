@@ -806,6 +806,17 @@ def fetch_microsoft_jobs(
 ) -> list[JobPosting]:
     endpoint = str(source.get("endpoint", "https://apply.careers.microsoft.com/api/pcsx/search")).strip()
     domain = str(source.get("domain", "microsoft.com")).strip() or "microsoft.com"
+    parsed_endpoint = urlparse(endpoint)
+    endpoint_origin = (
+        f"{parsed_endpoint.scheme}://{parsed_endpoint.netloc}"
+        if parsed_endpoint.scheme and parsed_endpoint.netloc
+        else "https://apply.careers.microsoft.com"
+    )
+    careers_base_url = str(source.get("base_url", endpoint_origin)).strip() or endpoint_origin
+    fallback_careers_url = str(source.get("careers_url", urljoin(careers_base_url, "/careers"))).strip()
+    source_label = str(source.get("source_label", "")).strip()
+    if not source_label:
+        source_label = "microsoft_careers" if domain.lower() == "microsoft.com" else f"{domain.split('.')[0].lower()}_careers"
     query = str(source.get("q", source.get("search_text", ""))).strip()
     location = str(source.get("location", "Canada")).strip() or "Canada"
     limit = int(source.get("limit", 20))
@@ -848,12 +859,12 @@ def fetch_microsoft_jobs(
             position_id = item.get("id")
             relative_url = str(item.get("positionUrl") or "").strip()
             if relative_url:
-                job_url = urljoin("https://apply.careers.microsoft.com", relative_url)
+                job_url = urljoin(careers_base_url, relative_url)
                 if "domain=" not in job_url:
                     joiner = "&" if "?" in job_url else "?"
                     job_url = f"{job_url}{joiner}domain={domain}"
             else:
-                job_url = "https://apply.careers.microsoft.com/careers"
+                job_url = fallback_careers_url
 
             details_text = details_cache.get(job_url)
             if details_text is None:
@@ -875,7 +886,7 @@ def fetch_microsoft_jobs(
                         if domain.lower() == "microsoft.com"
                         else f"pcsx:{domain.lower()}:{position_id}"
                     ),
-                    source="microsoft_careers",
+                    source=source_label,
                     company=company,
                     title=title,
                     location=location_text or "Unknown",
@@ -2131,6 +2142,14 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
                     company,
                     {
                         "endpoint": identifier,
+                        "domain": source.get("domain", "microsoft.com"),
+                        "base_url": source.get("base_url", ""),
+                        "careers_url": source.get("careers_url", ""),
+                        "source_label": source.get("source_label", ""),
+                        "q": source.get("q", source.get("search_text", "")),
+                        "location": source.get("location", "Canada"),
+                        "limit": source.get("limit", 20),
+                        "max_pages": source.get("max_pages", 5),
                         "title_keywords": title_keywords or [],
                         "exclude_title_keywords": exclude_title_keywords or [],
                         "exclude_required_experience_years_at_or_above": experience_threshold,
