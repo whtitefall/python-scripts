@@ -89,6 +89,7 @@ SNOWFLAKE_JOBPOSTING_JSONLD_PATTERN = re.compile(
     r"<script[^>]*type=[\"']application/ld\\+json[\"'][^>]*>(?P<payload>.*?)</script>",
     re.IGNORECASE | re.DOTALL,
 )
+EBAY_SEARCH_DEFAULT_URL = "https://jobs.ebayinc.com/us/en/search-results"
 GITHUB_MODELS_INFERENCE_URL = "https://models.github.ai/inference/chat/completions"
 EXPERIENCE_WORD_TO_NUM = {
     "zero": 0,
@@ -479,6 +480,11 @@ def normalize_html_text(fragment: str) -> str:
     no_tags = re.sub(r"<[^>]+>", " ", fragment)
     unescaped = html.unescape(no_tags)
     return re.sub(r"\s+", " ", unescaped).strip()
+
+
+def slugify_path_segment(value: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", value).strip("-")
+    return slug or "job"
 
 
 def parse_json_object_from_text(text: str) -> dict[str, Any] | None:
@@ -1637,6 +1643,84 @@ def fetch_yelp_careers_jobs(company: str, source: dict[str, Any], session: reque
     return jobs
 
 
+def fetch_ebay_careers_jobs(company: str, source: dict[str, Any], session: requests.Session) -> list[JobPosting]:
+    endpoint = str(source.get("endpoint", EBAY_SEARCH_DEFAULT_URL)).strip() or EBAY_SEARCH_DEFAULT_URL
+    page_size = int(source.get("page_size", 10))
+    max_pages = int(source.get("max_pages", 12))
+    title_keywords = to_keyword_list(source.get("title_keywords"))
+    exclude_title_keywords = to_keyword_list(source.get("exclude_title_keywords"))
+    experience_threshold = to_optional_int(source.get("exclude_required_experience_years_at_or_above"))
+    if page_size < 1:
+        page_size = 10
+    if max_pages < 1:
+        max_pages = 1
+
+    headers = {"User-Agent": "Mozilla/5.0", "Accept-Language": "en-US,en;q=0.9"}
+    jobs: list[JobPosting] = []
+    seen_ids: set[str] = set()
+
+    for page_index in range(max_pages):
+        offset = page_index * page_size
+        separator = "&" if "?" in endpoint else "?"
+        page_url = f"{endpoint}{separator}from={offset}&s=1"
+        resp = session.get(page_url, headers=headers, timeout=30)
+        resp.raise_for_status()
+        items = extract_json_array_from_html(resp.text, "jobs")
+        if not items:
+            break
+
+        new_on_page = 0
+        for item in items:
+            job_id = str(item.get("jobId") or item.get("reqId") or "").strip()
+            if not job_id:
+                continue
+            if job_id in seen_ids:
+                continue
+            seen_ids.add(job_id)
+            new_on_page += 1
+
+            title = normalize_html_text(str(item.get("title") or "Untitled"))
+            if not title_matches_keywords(title, title_keywords):
+                continue
+            if title_has_excluded_keywords(title, exclude_title_keywords):
+                continue
+
+            location = normalize_html_text(
+                str(item.get("cityStateCountry") or item.get("location") or item.get("cityState") or item.get("country") or "")
+            )
+            country = str(item.get("country") or "").strip()
+            if not is_canada_location(location) and country.lower() != "canada":
+                continue
+
+            details_text = flatten_text([item.get("descriptionTeaser"), item.get("category"), item.get("ml_skills")])
+            if requires_experience_at_or_above(details_text, experience_threshold):
+                continue
+
+            job_url = str(item.get("jobUrl") or "").strip()
+            if not job_url:
+                job_url = urljoin("https://jobs.ebayinc.com", f"/us/en/job/{job_id}/{slugify_path_segment(title)}")
+
+            updated_raw = str(item.get("postedDate") or item.get("datePosted") or item.get("dateCreated") or "").strip()
+            jobs.append(
+                JobPosting(
+                    unique_id=f"ebay:{job_id}",
+                    source="ebay_careers",
+                    company=company,
+                    title=title,
+                    location=location or country or "Canada",
+                    url=job_url,
+                    updated_at=parse_datetime_to_utc_iso(updated_raw) if updated_raw else utc_now_iso(),
+                )
+            )
+
+        if new_on_page == 0:
+            break
+        if len(items) < page_size:
+            break
+
+    return jobs
+
+
 def fetch_amazon_jobs(company: str, source: dict[str, Any], session: requests.Session) -> list[JobPosting]:
     endpoint = str(source.get("endpoint", "https://www.amazon.jobs/en/search.json")).strip()
     query = str(source.get("q", source.get("search_text", ""))).strip()
@@ -2211,6 +2295,22 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
                 all_jobs.extend(jobs)
                 logging.info("Yelp       %-20s -> %d Canada jobs", company, len(jobs))
                 return
+            if source_name == "ebay_careers":
+                jobs = fetch_ebay_careers_jobs(
+                    company,
+                    {
+                        "endpoint": identifier,
+                        "page_size": source.get("page_size", 10),
+                        "max_pages": source.get("max_pages", 12),
+                        "title_keywords": title_keywords or [],
+                        "exclude_title_keywords": exclude_title_keywords or [],
+                        "exclude_required_experience_years_at_or_above": experience_threshold,
+                    },
+                    session,
+                )
+                all_jobs.extend(jobs)
+                logging.info("eBay       %-20s -> %d Canada jobs", company, len(jobs))
+                return
             if source_name == "amazon_jobs":
                 jobs = fetch_amazon_jobs(
                     company,
@@ -2447,6 +2547,22 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
             source_config=source,
         )
 
+    for source in sources.get("ebay_careers", []):
+        company = str(source.get("company", "eBay")).strip() or "eBay"
+        endpoint = str(source.get("endpoint", EBAY_SEARCH_DEFAULT_URL)).strip() or EBAY_SEARCH_DEFAULT_URL
+        title_keywords = to_keyword_list(source.get("title_keywords"))
+        exclude_title_keywords = effective_excluded_keywords(source)
+        experience_threshold = effective_experience_threshold(source)
+        fetch_by_source(
+            "ebay_careers",
+            company,
+            endpoint,
+            title_keywords=title_keywords,
+            exclude_title_keywords=exclude_title_keywords,
+            experience_threshold=experience_threshold,
+            source_config=source,
+        )
+
     for source in sources.get("amazon_jobs", []):
         company = str(source.get("company", "Amazon")).strip() or "Amazon"
         endpoint = str(source.get("endpoint", "https://www.amazon.jobs/en/search.json")).strip()
@@ -2616,6 +2732,9 @@ def parse_source_from_career_page(url: str) -> tuple[str, str] | None:
 
     if "careers.snowflake.com" in host and "/search-results" in parsed.path:
         return ("snowflake_careers", SNOWFLAKE_SITEMAP_DEFAULT_URL)
+
+    if "jobs.ebayinc.com" in host and "/search-results" in parsed.path:
+        return ("ebay_careers", EBAY_SEARCH_DEFAULT_URL)
 
     return None
 

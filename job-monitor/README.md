@@ -12,11 +12,13 @@
 - Autodesk（Workday CXS）
 - AMD（Jibe / iCIMS API）
 - Yelp（`yelp.careers` 搜索页内嵌职位数据 + iCIMS apply URL）
+- eBay（`jobs.ebayinc.com` 搜索页内嵌职位数据）
 - Amazon（`amazon.jobs/en/search.json`）
 - Confluent（Ashby，`jobs.ashbyhq.com/confluent`）
 - IBM（`www-api.ibm.com` careers 搜索 API）
 - Intuit（`jobs.intuit.com/search-jobs` 页面解析 + 详情页 `datePosted`）
 - Snowflake（`careers.snowflake.com` sitemap + 职位页 `JobPosting` JSON-LD）
+- Reddit（Greenhouse）
 - Lyft（Greenhouse）
 - Stripe（Greenhouse）
 - Instacart（Greenhouse）
@@ -63,6 +65,7 @@ $env:SMTP_PASSWORD="你的16位AppPassword"
 - `sources.workday_cxs`：Workday CXS API
 - `sources.jibe`：Jibe / iCIMS API（如 AMD）
 - `sources.yelp_careers`：Yelp Careers（Phenom + iCIMS）
+- `sources.ebay_careers`：eBay Careers 搜索页（Phenom）
 - `sources.amazon_jobs`：Amazon Jobs JSON API
 - `sources.ashby`：Ashby Jobs（如 Confluent）
 - `sources.ibm_careers_api`：IBM Careers Search API

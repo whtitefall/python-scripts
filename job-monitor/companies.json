@@ -133,6 +133,11 @@
     ],
     "greenhouse": [
       {
+        "company": "Reddit",
+        "token": "reddit",
+        "title_keywords": ["software developer", "software engineer", "software development engineer", "software dev engineer", "sde", "developer", "web developer", "frontend developer", "frontend engineer", "front-end developer", "front-end engineer", "backend developer", "backend engineer", "back-end developer", "back-end engineer", "full stack", "full-stack", "ai developer", "ai engineer", "machine learning engineer", "ml engineer", "llm"]
+      },
+      {
         "company": "Lyft",
         "token": "lyft",
         "title_keywords": ["software developer", "software engineer", "software development engineer", "software dev engineer", "sde", "developer", "web developer", "frontend developer", "frontend engineer", "front-end developer", "front-end engineer", "backend developer", "backend engineer", "back-end developer", "back-end engineer", "full stack", "full-stack", "ai developer", "ai engineer", "machine learning engineer", "ml engineer", "llm"]
@@ -180,6 +185,15 @@
         "start_step": 10,
         "max_pages": 8,
         "title_keywords": ["software developer", "software engineer", "developer", "web developer", "frontend developer", "frontend engineer", "front-end developer", "front-end engineer", "backend developer", "backend engineer", "back-end developer", "back-end engineer", "full stack", "full-stack", "ai developer", "ai engineer", "machine learning engineer", "ml engineer", "llm"]
+      }
+    ],
+    "ebay_careers": [
+      {
+        "company": "eBay",
+        "endpoint": "https://jobs.ebayinc.com/us/en/search-results?country=Canada",
+        "page_size": 10,
+        "max_pages": 12,
+        "title_keywords": ["software developer", "software engineer", "software development engineer", "software dev engineer", "sde", "developer", "web developer", "frontend developer", "frontend engineer", "front-end developer", "front-end engineer", "backend developer", "backend engineer", "back-end developer", "back-end engineer", "full stack", "full-stack", "ai developer", "ai engineer", "machine learning engineer", "ml engineer", "llm"]
       }
     ],
     "amazon_jobs": [
