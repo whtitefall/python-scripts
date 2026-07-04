@@ -2404,6 +2404,9 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
         except requests.RequestException as exc:
             logging.warning("%s fetch failed for %s (%s): %s", source_name.title(), company, identifier, exc)
             return
+        except ValueError as exc:
+            logging.warning("%s fetch skipped for %s (%s): %s", source_name.title(), company, identifier, exc)
+            return
 
     for source in sources.get("greenhouse", []):
         company = str(source.get("company", "")).strip()
