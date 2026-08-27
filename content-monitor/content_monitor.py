@@ -571,14 +571,15 @@ def main() -> None:
     session = requests.Session()
     session.headers.update({"User-Agent": "Mozilla/5.0 (ContentMonitor/1.0)"})
 
+    if args.once:
+        run_once(args, config, state_path, session)
+        return
+
     while True:
         try:
             run_once(args, config, state_path, session)
         except Exception as exc:
             logging.exception("Monitor cycle failed: %s", exc)
-
-        if args.once:
-            break
 
         time.sleep(poll_interval_minutes * 60)
 

@@ -49,6 +49,23 @@ class ContentMonitorTests(unittest.TestCase):
             saved = json.loads(state_path.read_text(encoding="utf-8"))
             self.assertEqual("rss:test:1", saved["pending_notifications"][0]["unique_id"])
 
+    def test_once_mode_propagates_cycle_failure(self):
+        args = argparse.Namespace(
+            config="config.json",
+            state="state.json",
+            once=True,
+            send_initial_snapshot=False,
+            dry_run=False,
+            log_level="INFO",
+        )
+        with (
+            patch.object(content_monitor, "parse_args", return_value=args),
+            patch.object(content_monitor, "read_json_file", return_value={"poll_interval_minutes": 60}),
+            patch.object(content_monitor, "run_once", side_effect=RuntimeError("delivery failed")),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "delivery failed"):
+                content_monitor.main()
+
 
 if __name__ == "__main__":
     unittest.main()
