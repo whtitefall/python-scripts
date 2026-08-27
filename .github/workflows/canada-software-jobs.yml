@@ -20,7 +20,6 @@ on:
 permissions:
   contents: read
   actions: write
-  models: read
 
 concurrency:
   group: canada-software-jobs-monitor
@@ -33,7 +32,9 @@ jobs:
     env:
       SMTP_USER: ${{ secrets.SMTP_USER }}
       SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      AI_FILTER_TOKEN: ${{ secrets.AI_FILTER_TOKEN }}
+      AI_FILTER_ENDPOINT: ${{ secrets.AI_FILTER_ENDPOINT }}
+      AI_FILTER_MODEL: ${{ secrets.AI_FILTER_MODEL }}
       STATE_FILE: job-monitor/.job_monitor_state.json
     steps:
       - name: Checkout (primary)

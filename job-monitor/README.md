@@ -5,7 +5,7 @@
 当前已接入公司源：
 - Google（Google Careers 页面解析）
 - Microsoft（`apply.careers.microsoft.com/api/pcsx/search`）
-- Uber（`uber.com` 官方 Careers API：`loadFilterOptions` + `loadSearchJobsResults`）
+- Uber（`jobs.uber.com/api/jobs/search/` 官方搜索接口）
 - Qualcomm Careers（`careers.qualcomm.com/api/pcsx/search`）
 - Workday（官方 Workday CXS）
 - Qualcomm（Workday CXS，当前可能返回 0 职位；作为冗余源保留）
@@ -74,16 +74,16 @@ $env:SMTP_PASSWORD="你的16位AppPassword"
 - `sources.greenhouse`：Greenhouse API
 - `sources.lever`：Lever API
 - 每个源都支持 `title_keywords` 进行标题二次过滤
-- `ai_filter`：GitHub Models 二次智能过滤（可选）
+- `ai_filter`：OpenAI-compatible API 二次智能过滤（可选）
 
 脚本会做两层过滤：
 - 地点必须匹配加拿大
 - 职位标题必须命中 `title_keywords`
-- 职位标题命中 `exclude_title_keywords` 时会被排除（例如 `principal/staff/tester`）
-- 若设置 `exclude_required_experience_years_at_or_above`，会按该阈值做硬过滤；当前配置已关闭该硬过滤，交由 AI 二次判断
+- 职位标题命中 `exclude_title_keywords` 时会被排除（例如 `principal/staff/tester/firmware/ASIC`）
+- `exclude_required_experience_years_at_or_above` 当前为 5；同一职位出现多个经验要求时取最小值，因此同时出现 `3+` 和 `5+` 会按 `3+` 保留
 - 邮件中的发布时间会显示为“X天Y小时Z分前 + 具体 UTC 时间”
 
-### AI 智能过滤（GitHub Models）
+### AI 智能过滤（可选提供商）
 
 脚本支持“优先 AI 判定”：
 - 先做基础规则过滤（地点/标题关键词/排除关键词）
@@ -92,7 +92,9 @@ $env:SMTP_PASSWORD="你的16位AppPassword"
 `companies.json` 中的 `ai_filter` 字段可控制：
 - `enabled`：是否启用
 - `priority_mode`：为 `true` 时优先走 AI（会评估本轮全部职位）
-- `model`：模型 ID（默认 `openai/gpt-4o`）
+- `token_env`：读取 API token 的环境变量名（默认 `AI_FILTER_TOKEN`）
+- `endpoint`：OpenAI-compatible chat completions 接口，可由 `AI_FILTER_ENDPOINT` 覆盖
+- `model`：模型 ID，可由 `AI_FILTER_MODEL` 覆盖
 - `max_jobs_per_cycle`：每轮最多给 AI 判定多少个职位
 - `max_detail_chars`：每个职位传给 AI 的详情文本长度上限
 - `fallback_allow_on_error`：AI 调用失败时是否回退为“放行”
@@ -101,7 +103,7 @@ $env:SMTP_PASSWORD="你的16位AppPassword"
 - `ignore_role_domains`：AI 忽略方向（如硬件相关）
 - `custom_instruction`：给 AI 的额外自然语言偏好
 
-在 GitHub Actions 中已自动配置 `models: read` 权限，并通过 `GITHUB_TOKEN` 调用 GitHub Models 推理 API。
+GitHub Models 已于 2026-07-30 退役，不能再使用 `GITHUB_TOKEN` 调用。未配置新的 AI 提供商时，脚本会自动使用基础规则，不会请求退役接口。
 
 ## 4) 运行
 
@@ -127,6 +129,7 @@ python .\job_monitor.py
 
 脚本会生成 `.job_monitor_state.json`，用于记住已通知过的岗位，避免重复发信。
 在 GitHub Actions 中，该状态文件会自动通过缓存恢复和保存，实现跨运行持久化增量监控。
+邮件发送失败时，待发送职位会先写入状态文件，然后脚本以非零状态退出，使 Action 明确显示失败并在下次运行重试。
 
 ## 6) 常见问题
 

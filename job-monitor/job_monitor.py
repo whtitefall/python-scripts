@@ -90,7 +90,8 @@ SNOWFLAKE_JOBPOSTING_JSONLD_PATTERN = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 EBAY_SEARCH_DEFAULT_URL = "https://jobs.ebayinc.com/us/en/search-results"
-GITHUB_MODELS_INFERENCE_URL = "https://models.github.ai/inference/chat/completions"
+UBER_JOBS_SEARCH_DEFAULT_URL = "https://jobs.uber.com/api/jobs/search/"
+UBER_JOBS_BASE_URL = "https://jobs.uber.com"
 EXPERIENCE_WORD_TO_NUM = {
     "zero": 0,
     "one": 1,
@@ -289,9 +290,11 @@ def format_uber_location_item(value: Any) -> str:
         return value.strip()
     if not isinstance(value, dict):
         return ""
-    city = str(value.get("city", "")).strip()
-    region = str(value.get("region", "")).strip()
-    country = str(value.get("countryName") or value.get("country") or "").strip()
+    city = str(value.get("City") or value.get("city") or "").strip()
+    region = str(value.get("Region") or value.get("region") or "").strip()
+    country = str(
+        value.get("Country") or value.get("countryName") or value.get("country") or ""
+    ).strip()
     parts = [part for part in [city, region, country] if part]
     return ", ".join(parts)
 
@@ -439,20 +442,13 @@ def requires_experience_at_or_above(text: str, threshold: int | None) -> bool:
     if threshold <= 0:
         return False
     min_years = extract_min_experience_years(text)
-    return any(years >= threshold for years in min_years)
+    if not min_years:
+        return False
+    return min(min_years) >= threshold
 
 
 def requires_experience_min_at_or_above(text: str, threshold: int | None) -> bool:
-    if threshold is None:
-        return False
-    if threshold <= 0:
-        return False
-    min_years = extract_min_experience_years(text)
-    if not min_years:
-        return False
-    # Workday pages can include multiple tracks (e.g. Software Engineer + Senior Software Engineer).
-    # In those cases, use the smallest explicitly stated requirement.
-    return min(min_years) >= threshold
+    return requires_experience_at_or_above(text, threshold)
 
 
 def flatten_text(value: Any) -> str:
@@ -547,13 +543,16 @@ def apply_ai_filter(
     if not jobs:
         return jobs, set()
 
-    token = os.getenv("GITHUB_TOKEN", "").strip()
-    if not token:
-        logging.warning("AI filter enabled but GITHUB_TOKEN is missing. Falling back to hard rules only.")
+    token_env = str(raw_cfg.get("token_env", "AI_FILTER_TOKEN")).strip() or "AI_FILTER_TOKEN"
+    token = os.getenv(token_env, "").strip()
+    endpoint = os.getenv("AI_FILTER_ENDPOINT", "").strip() or str(raw_cfg.get("endpoint", "")).strip()
+    model = os.getenv("AI_FILTER_MODEL", "").strip() or str(raw_cfg.get("model", "")).strip()
+    if not token or not endpoint or not model:
+        logging.info(
+            "AI filter is not fully configured (%s, endpoint, or model missing). Falling back to hard rules only.",
+            token_env,
+        )
         return jobs, set()
-
-    endpoint = str(raw_cfg.get("endpoint", GITHUB_MODELS_INFERENCE_URL)).strip() or GITHUB_MODELS_INFERENCE_URL
-    model = str(raw_cfg.get("model", "openai/gpt-4o")).strip() or "openai/gpt-4o"
     timeout_seconds = to_optional_int(raw_cfg.get("timeout_seconds"))
     timeout_seconds = timeout_seconds if timeout_seconds and timeout_seconds > 0 else 35
     priority_mode = to_bool(raw_cfg.get("priority_mode"), False)
@@ -641,7 +640,7 @@ def apply_ai_filter(
             json=request_payload,
             headers={
                 "Authorization": f"Bearer {token}",
-                "Accept": "application/vnd.github+json",
+                "Accept": "application/json",
                 "Content-Type": "application/json",
             },
             timeout=timeout_seconds,
@@ -1099,92 +1098,42 @@ def fetch_jibe_jobs(company: str, source: dict[str, Any], session: requests.Sess
 
 
 def fetch_uber_careers_jobs(company: str, source: dict[str, Any], session: requests.Session) -> list[JobPosting]:
-    careers_url = str(source.get("careers_url", "https://www.uber.com/us/en/careers/list/")).strip()
-    filter_endpoint = str(source.get("filter_endpoint", "https://www.uber.com/api/loadFilterOptions")).strip()
-    search_endpoint = str(source.get("endpoint", "https://www.uber.com/api/loadSearchJobsResults")).strip()
-    locale_code = str(source.get("locale_code", "en")).strip() or "en"
-    query = str(source.get("q", source.get("search_text", ""))).strip()
-    limit = int(source.get("limit", 20))
+    search_endpoint = str(source.get("endpoint", UBER_JOBS_SEARCH_DEFAULT_URL)).strip()
+    base_url = str(source.get("base_url", UBER_JOBS_BASE_URL)).strip() or UBER_JOBS_BASE_URL
+    country = str(source.get("country", "Canada")).strip() or "Canada"
+    limit = min(max(int(source.get("limit", 10)), 1), 10)
     max_pages = int(source.get("max_pages", 5))
     keyword_list = to_keyword_list(source.get("title_keywords"))
     exclude_keyword_list = to_keyword_list(source.get("exclude_title_keywords"))
     experience_threshold = to_optional_int(source.get("exclude_required_experience_years_at_or_above"))
     location_cities = {str(x).strip().lower() for x in (source.get("location_cities") or []) if str(x).strip()}
-    if not careers_url:
-        raise ValueError(f"Uber source for {company} is missing careers_url.")
-    if not filter_endpoint or not search_endpoint:
-        raise ValueError(f"Uber source for {company} is missing endpoint settings.")
-
-    session.get(careers_url, timeout=30)
-    base_url = urlparse(careers_url)
-    origin = f"{base_url.scheme}://{base_url.netloc}" if base_url.scheme and base_url.netloc else "https://www.uber.com"
-    headers = {
-        "Accept": "application/json,text/plain,*/*",
-        "Content-Type": "application/json",
-        "x-csrf-token": "x",
-        "Origin": origin,
-        "Referer": careers_url,
-    }
-    filter_url = f"{filter_endpoint}?localeCode={locale_code}"
-    search_url = f"{search_endpoint}?localeCode={locale_code}"
-    filter_resp = session.post(filter_url, json={}, headers=headers, timeout=30)
-    filter_resp.raise_for_status()
-    filter_payload = filter_resp.json()
-    if str(filter_payload.get("status", "")).lower() != "success":
-        raise ValueError(f"Uber filter endpoint returned failure status for {company}.")
-
-    all_locations = ((filter_payload.get("data") or {}).get("location")) or []
-    canada_locations: list[dict[str, Any]] = []
-    for item in all_locations:
-        if not isinstance(item, dict):
-            continue
-        country_code = str(item.get("country", "")).strip().upper()
-        country_name = str(item.get("countryName", "")).strip().lower()
-        city = str(item.get("city", "")).strip().lower()
-        if country_code != "CAN" and "canada" not in country_name:
-            continue
-        if location_cities and city not in location_cities:
-            continue
-        canada_locations.append(item)
-    if not canada_locations:
-        raise ValueError(f"Uber source for {company} has no Canada locations in filter options.")
+    if not search_endpoint:
+        raise ValueError(f"Uber source for {company} is missing endpoint.")
 
     jobs: list[JobPosting] = []
-    for page in range(max_pages):
-        params_payload: dict[str, Any] = {"location": canada_locations}
-        if query:
-            params_payload["query"] = query
-
-        body = {"limit": limit, "page": page, "params": params_payload}
-        resp = session.post(search_url, json=body, headers=headers, timeout=30)
+    for page in range(1, max_pages + 1):
+        resp = session.get(
+            search_endpoint,
+            params={"countries": country, "page": page, "pagesize": limit},
+            headers={"Accept": "application/json"},
+            timeout=30,
+        )
         resp.raise_for_status()
         payload = resp.json()
-        if str(payload.get("status", "")).lower() != "success":
-            data = payload.get("data") or {}
-            message = str(data.get("message", "")).strip()
-            logging.warning("Uber search returned failure status for %s (page=%d): %s", company, page, message or "unknown")
-            break
-
-        data = payload.get("data") or {}
-        results = data.get("results") or []
+        results = payload.get("jobs") or []
         if not results:
             break
 
-        total_raw = data.get("totalResults")
-        total_low = None
-        if isinstance(total_raw, dict):
-            total_low = to_optional_int(total_raw.get("low"))
-        elif isinstance(total_raw, (int, float, str)):
-            total_low = to_optional_int(total_raw)
-
         for item in results:
-            title = str(item.get("title", "Untitled")).strip()
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("Title", "Untitled")).strip()
             if not title_matches_keywords(title, keyword_list):
                 continue
             if title_has_excluded_keywords(title, exclude_keyword_list):
                 continue
 
-            all_locs = item.get("allLocations")
+            all_locs = item.get("Locations")
             location_parts: list[str] = []
             if isinstance(all_locs, list) and all_locs:
                 for loc_item in all_locs:
@@ -1192,24 +1141,51 @@ def fetch_uber_careers_jobs(company: str, source: dict[str, Any], session: reque
                     if formatted:
                         location_parts.append(formatted)
             else:
-                formatted = format_uber_location_item(item.get("location"))
+                formatted = format_uber_location_item(item.get("Location"))
                 if formatted:
                     location_parts.append(formatted)
             location_text = "; ".join(location_parts).strip() or "Unknown"
             if not is_canada_location(location_text):
                 continue
+            if location_cities:
+                item_cities = {
+                    str(loc.get("City") or loc.get("city") or "").strip().lower()
+                    for loc in (all_locs or [])
+                    if isinstance(loc, dict)
+                }
+                if not item_cities.intersection(location_cities):
+                    continue
 
-            details_text = normalize_html_text(str(item.get("description", "")))
+            salary = item.get("Salary") if isinstance(item.get("Salary"), dict) else {}
+            details_text = flatten_text(
+                [
+                    item.get("Description"),
+                    item.get("Summary"),
+                    item.get("AdditionalText"),
+                    item.get("AdditionalDescription1"),
+                    salary.get("Description"),
+                ]
+            )
             if requires_experience_at_or_above(details_text, experience_threshold):
                 continue
 
-            job_id_raw = item.get("id")
+            job_id_raw = item.get("Id") or item.get("Reference")
             job_id = str(job_id_raw).strip() if job_id_raw is not None else ""
             if not job_id:
                 unique_seed = f"{company}|{title}|{location_text}|{details_text[:120]}"
                 job_id = hashlib.sha1(unique_seed.encode("utf-8")).hexdigest()[:16]
-            job_url = f"{origin}/us/en/careers/list/{job_id}"
-            updated_raw = str(item.get("creationDate") or item.get("updatedDate") or "").strip()
+            job_path = ""
+            urls = item.get("Urls")
+            if isinstance(urls, list):
+                default_url = next(
+                    (entry for entry in urls if isinstance(entry, dict) and entry.get("IsDefault")),
+                    None,
+                )
+                chosen_url = default_url or next((entry for entry in urls if isinstance(entry, dict)), None)
+                if chosen_url:
+                    job_path = str(chosen_url.get("Url", "")).strip()
+            job_url = urljoin(base_url, job_path or f"/en/jobs/{job_id}/")
+            updated_raw = str(item.get("DisplayDate") or "").strip()
 
             jobs.append(
                 JobPosting(
@@ -1225,7 +1201,8 @@ def fetch_uber_careers_jobs(company: str, source: dict[str, Any], session: reque
 
         if len(results) < limit:
             break
-        if total_low is not None and (page + 1) * limit >= total_low:
+        total_pages = to_optional_int(payload.get("totalPages"))
+        if total_pages is not None and page >= total_pages:
             break
 
     return jobs
@@ -2248,12 +2225,10 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
                 jobs = fetch_uber_careers_jobs(
                     company,
                     {
-                        "careers_url": identifier,
-                        "filter_endpoint": source.get("filter_endpoint", "https://www.uber.com/api/loadFilterOptions"),
-                        "endpoint": source.get("endpoint", "https://www.uber.com/api/loadSearchJobsResults"),
-                        "locale_code": source.get("locale_code", "en"),
-                        "q": source.get("q", source.get("search_text", "")),
-                        "limit": source.get("limit", 20),
+                        "endpoint": identifier,
+                        "base_url": source.get("base_url", UBER_JOBS_BASE_URL),
+                        "country": source.get("country", "Canada"),
+                        "limit": source.get("limit", 10),
                         "max_pages": source.get("max_pages", 5),
                         "location_cities": source.get("location_cities", []),
                         "title_keywords": title_keywords or [],
@@ -2480,16 +2455,16 @@ def collect_jobs(config: dict[str, Any], session: requests.Session) -> list[JobP
 
     for source in sources.get("uber_careers", []):
         company = str(source.get("company", "Uber")).strip() or "Uber"
-        careers_url = str(source.get("careers_url", "https://www.uber.com/us/en/careers/list/")).strip()
+        endpoint = str(source.get("endpoint", UBER_JOBS_SEARCH_DEFAULT_URL)).strip()
         title_keywords = to_keyword_list(source.get("title_keywords"))
         exclude_title_keywords = effective_excluded_keywords(source)
         experience_threshold = effective_experience_threshold(source)
-        if not careers_url:
+        if not endpoint:
             continue
         fetch_by_source(
             "uber_careers",
             company,
-            careers_url,
+            endpoint,
             title_keywords=title_keywords,
             exclude_title_keywords=exclude_title_keywords,
             experience_threshold=experience_threshold,
@@ -2905,6 +2880,7 @@ def run_check_cycle(
     ai_rejected_ids = set(str(x) for x in state.get("ai_rejected_job_ids", []))
     pending_map = index_pending_jobs(state.get("pending_notifications", []))
     email_already_attempted = False
+    email_delivery_failed = False
 
     if max_post_age_days > 0 and pending_map:
         kept_pending, stale_pending = split_jobs_by_post_age(
@@ -2958,6 +2934,7 @@ def run_check_cycle(
                 seen_ids.update(j.unique_id for j in jobs)
             else:
                 pending_map = {job.unique_id: job for job in jobs}
+                email_delivery_failed = True
         else:
             seen_ids.update(j.unique_id for j in jobs)
             logging.info("Initialized baseline with %d jobs. No initial email sent.", len(jobs))
@@ -2977,6 +2954,7 @@ def run_check_cycle(
             pending_jobs = []
         else:
             logging.warning("Will retry %d pending jobs in next cycle.", len(pending_jobs))
+            email_delivery_failed = True
     elif pending_jobs:
         logging.warning("Will retry %d pending jobs in next cycle.", len(pending_jobs))
     else:
@@ -2987,6 +2965,8 @@ def run_check_cycle(
     state["ai_rejected_job_ids"] = sorted(ai_rejected_ids)
     state["last_check_at"] = utc_now_iso()
     save_state(state_path, state)
+    if email_delivery_failed:
+        raise RuntimeError("Email delivery failed; pending job notifications were preserved for retry.")
 
 
 def parse_args() -> argparse.Namespace:

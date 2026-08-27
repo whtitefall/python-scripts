@@ -12,9 +12,15 @@
     "quality assurance",
     "qa engineer",
     "sdet",
-    "software development engineer in test"
+    "software development engineer in test",
+    "firmware",
+    "embedded",
+    "asic",
+    "silicon",
+    "fpga",
+    "hardware"
   ],
-  "exclude_required_experience_years_at_or_above": null,
+  "exclude_required_experience_years_at_or_above": 5,
   "recipient_email": "whtitefall@gmail.com",
   "smtp_host": "smtp.gmail.com",
   "smtp_port": 465,
@@ -22,8 +28,9 @@
   "ai_filter": {
     "enabled": true,
     "priority_mode": true,
-    "model": "openai/gpt-4o",
-    "endpoint": "https://models.github.ai/inference/chat/completions",
+    "token_env": "AI_FILTER_TOKEN",
+    "model": "",
+    "endpoint": "",
     "timeout_seconds": 35,
     "max_jobs_per_cycle": 60,
     "max_detail_chars": 1400,
@@ -84,11 +91,10 @@
     "uber_careers": [
       {
         "company": "Uber",
-        "careers_url": "https://www.uber.com/us/en/careers/list/",
-        "filter_endpoint": "https://www.uber.com/api/loadFilterOptions",
-        "endpoint": "https://www.uber.com/api/loadSearchJobsResults",
-        "locale_code": "en",
-        "limit": 20,
+        "endpoint": "https://jobs.uber.com/api/jobs/search/",
+        "base_url": "https://jobs.uber.com",
+        "country": "Canada",
+        "limit": 10,
         "max_pages": 5,
         "location_cities": ["Toronto", "Montreal"],
         "title_keywords": ["software developer", "software engineer", "developer", "web developer", "frontend developer", "frontend engineer", "front-end developer", "front-end engineer", "backend developer", "backend engineer", "back-end developer", "back-end engineer", "full stack", "full-stack", "ai developer", "ai engineer", "machine learning engineer", "ml engineer", "llm"]

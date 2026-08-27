@@ -461,6 +461,7 @@ def send_email(
 def run_once(args: argparse.Namespace, config: dict[str, Any], state_path: Path, session: requests.Session) -> None:
     updates = collect_updates(config, session)
     state = load_state(state_path)
+    email_error: Exception | None = None
 
     seen_ids: set[str] = set(str(x) for x in state.get("seen_update_ids", []))
     pending_items = deserialize_updates(state.get("pending_notifications", []))
@@ -504,9 +505,11 @@ def run_once(args: argparse.Namespace, config: dict[str, Any], state_path: Path,
         elif not smtp_user or not smtp_password:
             logging.warning("SMTP_USER or SMTP_PASSWORD is not configured. Keeping %d updates pending.", len(to_notify_recent))
             state["pending_notifications"] = [asdict(item) for item in to_notify_recent]
+            email_error = RuntimeError("SMTP credentials are not configured.")
         elif not recipient_email:
             logging.warning("recipient_email is missing in config. Keeping %d updates pending.", len(to_notify_recent))
             state["pending_notifications"] = [asdict(item) for item in to_notify_recent]
+            email_error = RuntimeError("Recipient email is not configured.")
         else:
             try:
                 send_email(
@@ -524,6 +527,7 @@ def run_once(args: argparse.Namespace, config: dict[str, Any], state_path: Path,
             except Exception as exc:
                 logging.exception("Failed to send email: %s", exc)
                 state["pending_notifications"] = [asdict(item) for item in to_notify_recent]
+                email_error = exc
     else:
         logging.info("No new content updates.")
         state["pending_notifications"] = []
@@ -531,6 +535,8 @@ def run_once(args: argparse.Namespace, config: dict[str, Any], state_path: Path,
     state["seen_update_ids"] = sorted(seen_ids)
     state["last_check_at"] = utc_now_iso()
     save_state(state_path, state)
+    if email_error is not None:
+        raise RuntimeError("Email delivery failed; pending content notifications were preserved for retry.") from email_error
 
 
 def parse_args() -> argparse.Namespace:
@@ -579,4 +585,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -52,4 +52,4 @@ python content-monitor/content_monitor.py --once --dry-run
 
 默认状态文件：`content-monitor/.content_monitor_state.json`  
 用于去重与失败重试（邮件发送失败会保留待发送队列）。
-
+邮件发送失败时脚本会以非零状态退出，因此 GitHub Action 会显示失败，而不是假成功。
