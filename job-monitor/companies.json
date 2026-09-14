@@ -4,6 +4,10 @@
   "request_delay_seconds": 4,
   "request_jitter_seconds": 1.5,
   "exclude_title_keywords": [
+    "intern",
+    "internship",
+    "co-op",
+    "co op",
     "principal",
     "principle",
     "staff",

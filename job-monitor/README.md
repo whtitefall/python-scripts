@@ -79,7 +79,7 @@ $env:SMTP_PASSWORD="你的16位AppPassword"
 脚本会做两层过滤：
 - 地点必须匹配加拿大
 - 职位标题必须命中 `title_keywords`
-- 职位标题命中 `exclude_title_keywords` 时会被排除（例如 `principal/staff/tester/firmware/ASIC`）
+- 职位标题命中 `exclude_title_keywords` 时会被排除（例如 `intern/internship/co-op/principal/staff/tester/firmware/ASIC`）；发送前还会再次过滤持久化待发送队列
 - `exclude_required_experience_years_at_or_above` 当前为 5；同一职位出现多个经验要求时取最小值，因此同时出现 `3+` 和 `5+` 会按 `3+` 保留
 - 邮件中的发布时间会显示为“X天Y小时Z分前 + 具体 UTC 时间”
 

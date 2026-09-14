@@ -384,7 +384,10 @@ def title_has_excluded_keywords(title: str, keywords: list[str]) -> bool:
     if not cleaned_keywords:
         return False
     lowered_title = title.lower()
-    return any(keyword in lowered_title for keyword in cleaned_keywords)
+    return any(
+        re.search(rf"(?<![a-z0-9]){re.escape(keyword)}(?![a-z0-9])", lowered_title)
+        for keyword in cleaned_keywords
+    )
 
 
 def parse_year_token(token: str | None) -> int | None:
@@ -2881,6 +2884,27 @@ def run_check_cycle(
     pending_map = index_pending_jobs(state.get("pending_notifications", []))
     email_already_attempted = False
     email_delivery_failed = False
+
+    excluded_title_keywords = to_keyword_list(config.get("exclude_title_keywords"))
+    if excluded_title_keywords:
+        allowed_jobs = [
+            job for job in jobs if not title_has_excluded_keywords(job.title, excluded_title_keywords)
+        ]
+        excluded_pending = [
+            job
+            for job in pending_map.values()
+            if title_has_excluded_keywords(job.title, excluded_title_keywords)
+        ]
+        if len(allowed_jobs) != len(jobs) or excluded_pending:
+            logging.info(
+                "Title filter removed %d fetched jobs and %d pending jobs.",
+                len(jobs) - len(allowed_jobs),
+                len(excluded_pending),
+            )
+        jobs = allowed_jobs
+        for excluded_job in excluded_pending:
+            pending_map.pop(excluded_job.unique_id, None)
+            seen_ids.add(excluded_job.unique_id)
 
     if max_post_age_days > 0 and pending_map:
         kept_pending, stale_pending = split_jobs_by_post_age(

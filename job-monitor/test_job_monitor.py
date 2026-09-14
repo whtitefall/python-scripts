@@ -30,6 +30,52 @@ class FakeSession:
 
 
 class UberMonitorTests(unittest.TestCase):
+    def test_intern_titles_are_excluded_without_matching_internationalization(self):
+        keywords = ["intern", "internship", "co-op", "co op"]
+
+        self.assertTrue(job_monitor.title_has_excluded_keywords("Software Engineer Intern", keywords))
+        self.assertTrue(job_monitor.title_has_excluded_keywords("Software Engineering Internship", keywords))
+        self.assertTrue(job_monitor.title_has_excluded_keywords("Software Developer Co-op", keywords))
+        self.assertFalse(
+            job_monitor.title_has_excluded_keywords("Software Engineer, Internationalization", keywords)
+        )
+
+    def test_existing_pending_intern_job_is_removed_before_email(self):
+        intern_job = job_monitor.JobPosting(
+            unique_id="test:intern-1",
+            source="test",
+            company="Example",
+            title="Software Developer Intern",
+            location="Toronto, Canada",
+            url="https://example.com/jobs/intern-1",
+            updated_at=datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        )
+        state = {
+            "initialized": True,
+            "seen_job_ids": [],
+            "pending_notifications": [intern_job.__dict__],
+            "ai_rejected_job_ids": [],
+        }
+        config = {
+            "recipient_email": "alerts@example.com",
+            "max_post_age_days_for_email": 2,
+            "exclude_title_keywords": ["intern", "internship", "co-op", "co op"],
+            "sources": {},
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_path = Path(temp_dir) / "state.json"
+            with (
+                patch.object(job_monitor, "collect_jobs", return_value=[]),
+                patch.object(job_monitor, "send_email") as send_email,
+            ):
+                job_monitor.run_check_cycle(config, state, state_path, FakeSession({}), False)
+
+            saved = json.loads(state_path.read_text(encoding="utf-8"))
+            send_email.assert_not_called()
+            self.assertEqual([], saved["pending_notifications"])
+            self.assertIn("test:intern-1", saved["seen_job_ids"])
+
     def test_new_uber_api_and_minimum_experience_are_supported(self):
         payload = {
             "jobs": [
