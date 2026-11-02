@@ -1,0 +1,26 @@
+[Unit]
+Description=Canada software job alerts
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=job-monitor
+Group=job-monitor
+WorkingDirectory=/opt/canada-job-monitor
+EnvironmentFile=/etc/canada-job-monitor.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/canada-job-monitor/.venv/bin/python /opt/canada-job-monitor/job_monitor.py --config /opt/canada-job-monitor/companies.json --state /var/lib/canada-job-monitor/state.json
+Restart=always
+RestartSec=15
+TimeoutStopSec=30
+StateDirectory=canada-job-monitor
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

@@ -2864,6 +2864,23 @@ def run_check_cycle(
     session: requests.Session,
     send_initial_snapshot: bool,
 ) -> None:
+    cycle_started_at = datetime.now(timezone.utc)
+    cycle_started_monotonic = time.monotonic()
+    previous_started_at = parse_datetime_iso(
+        str(state.get("last_check_started_at") or state.get("last_check_at") or "")
+    )
+    check_gap_seconds = None
+    if previous_started_at is not None:
+        check_gap_seconds = max(0, int((cycle_started_at - previous_started_at).total_seconds()))
+        target_seconds = max(1, int(config.get("poll_interval_minutes", 5))) * 60
+        logging.info("Actual check interval=%ds; target=%ds.", check_gap_seconds, target_seconds)
+        if check_gap_seconds > target_seconds * 2:
+            logging.warning(
+                "Monitoring delayed: %.1f minutes since the previous check (target %.1f minutes).",
+                check_gap_seconds / 60,
+                target_seconds / 60,
+            )
+
     recipient = str(config.get("recipient_email", "")).strip()
     if not recipient:
         raise ValueError("recipient_email is missing in config.")
@@ -2988,7 +3005,11 @@ def run_check_cycle(
     state["pending_notifications"] = [asdict(job) for job in pending_jobs]
     state["ai_rejected_job_ids"] = sorted(ai_rejected_ids)
     state["last_check_at"] = utc_now_iso()
+    state["last_check_started_at"] = cycle_started_at.replace(microsecond=0).isoformat()
+    state["last_check_gap_seconds"] = check_gap_seconds
+    state["last_check_duration_seconds"] = round(time.monotonic() - cycle_started_monotonic, 2)
     save_state(state_path, state)
+    logging.info("Check cycle finished in %.2fs.", state["last_check_duration_seconds"])
     if email_delivery_failed:
         raise RuntimeError("Email delivery failed; pending job notifications were preserved for retry.")
 
@@ -3030,7 +3051,7 @@ def main() -> None:
     state_path = Path(args.state).resolve()
 
     config = read_json_file(config_path)
-    poll_interval = int(config.get("poll_interval_minutes", 60))
+    poll_interval = int(config.get("poll_interval_minutes", 5))
     if poll_interval < 1:
         raise ValueError("poll_interval_minutes must be >= 1.")
 
@@ -3052,12 +3073,14 @@ def main() -> None:
 
     logging.info("Job monitor started. Interval=%d minutes, config=%s", poll_interval, config_path)
     while True:
+        cycle_started = time.monotonic()
         try:
             run_check_cycle(config, state, state_path, session, args.send_initial_snapshot)
             state = load_state(state_path)
         except Exception:
             logging.exception("Unexpected error in check cycle.")
-        time.sleep(poll_interval * 60)
+        # Count fetch time toward the interval so a 3-minute check does not add 3 minutes of drift.
+        time.sleep(max(1.0, poll_interval * 60 - (time.monotonic() - cycle_started)))
 
 
 if __name__ == "__main__":

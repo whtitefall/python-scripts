@@ -56,7 +56,7 @@ $env:SMTP_PASSWORD="你的16位AppPassword"
 ## 3) 配置监控源
 
 编辑 `companies.json`：
-- `poll_interval_minutes`：轮询间隔（分钟）
+- `poll_interval_minutes`：持续运行时每轮开始之间的目标间隔（当前为 5 分钟，包含抓取耗时）
 - `max_post_age_days_for_email`：仅推送最近 N 天发布的岗位（默认 2）
 - `request_delay_seconds` + `request_jitter_seconds`：请求节流，降低反爬风险
 - `sources.google_careers`：Google Careers
@@ -130,6 +130,14 @@ python .\job_monitor.py
 脚本会生成 `.job_monitor_state.json`，用于记住已通知过的岗位，避免重复发信。
 在 GitHub Actions 中，该状态文件会自动通过缓存恢复和保存，实现跨运行持久化增量监控。
 邮件发送失败时，待发送职位会先写入状态文件，然后脚本以非零状态退出，使 Action 明确显示失败并在下次运行重试。
+
+### 检查频率与延迟
+
+GitHub Actions 当前计划每 5 分钟触发（UTC 每小时第 2、7、12、17……57 分）。GitHub 的 schedule 是尽力调度，会延迟或跳过，不能保证实时；手动运行成功也不能证明 schedule 准时。官方说明：https://docs.github.com/en/actions/how-tos/troubleshoot-workflows#scheduled-workflows-running-at-unexpected-times
+
+每次运行会保存实际检查间隔和抓取耗时，并写入 Action Summary。间隔超过目标的两倍时会显示 warning；Action 显示绿色只代表本次检查成功，不代表过去一直连续检查。
+
+需要稳定的分钟级监控时，应在云服务器运行常驻进程，使用 [deploy/canada-job-monitor.service](deploy/canada-job-monitor.service)。部署步骤见 [deploy/README.md](deploy/README.md)。招聘源本身公开数据的时间、日期精度、限流和邮件投递仍会影响最终延迟。
 
 ## 6) 常见问题
 

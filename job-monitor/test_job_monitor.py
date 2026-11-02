@@ -1,8 +1,9 @@
 import json
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import job_monitor
@@ -27,6 +28,44 @@ class FakeSession:
     def get(self, url, **kwargs):
         self.calls.append((url, kwargs))
         return FakeResponse(self.payload)
+
+
+class MonitorTimingTests(unittest.TestCase):
+    def test_continuous_mode_counts_fetch_time_toward_poll_interval(self):
+        args = SimpleNamespace(
+            config="companies.json", state="state.json", once=False, send_initial_snapshot=False
+        )
+        with (
+            patch.object(job_monitor, "parse_args", return_value=args),
+            patch.object(job_monitor, "read_json_file", return_value={"poll_interval_minutes": 5}),
+            patch.object(job_monitor, "load_state", return_value={}),
+            patch.object(job_monitor.requests, "Session"),
+            patch.object(job_monitor, "run_check_cycle"),
+            patch.object(job_monitor.time, "monotonic", side_effect=[100.0, 280.0]),
+            patch.object(job_monitor.time, "sleep", side_effect=KeyboardInterrupt) as sleep,
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                job_monitor.main()
+        sleep.assert_called_once_with(120.0)
+
+    def test_seven_hour_gap_is_reported_and_persisted(self):
+        state = {
+            "initialized": True,
+            "last_check_started_at": (datetime.now(timezone.utc) - timedelta(hours=7)).isoformat(),
+        }
+        config = {"recipient_email": "alerts@example.com", "poll_interval_minutes": 5}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_path = Path(temp_dir) / "state.json"
+            with (
+                patch.object(job_monitor, "collect_jobs", return_value=[]),
+                self.assertLogs(level="WARNING") as logs,
+            ):
+                job_monitor.run_check_cycle(config, state, state_path, FakeSession({}), False)
+            saved = json.loads(state_path.read_text(encoding="utf-8"))
+        self.assertTrue(any("Monitoring delayed" in line for line in logs.output))
+        self.assertAlmostEqual(7 * 60 * 60, saved["last_check_gap_seconds"], delta=2)
+        self.assertIn("last_check_started_at", saved)
+        self.assertGreaterEqual(saved["last_check_duration_seconds"], 0)
 
 
 class UberMonitorTests(unittest.TestCase):

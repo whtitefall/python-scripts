@@ -1,5 +1,5 @@
 {
-  "poll_interval_minutes": 60,
+  "poll_interval_minutes": 5,
   "max_post_age_days_for_email": 2,
   "request_delay_seconds": 4,
   "request_jitter_seconds": 1.5,

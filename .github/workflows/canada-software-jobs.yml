@@ -8,7 +8,7 @@ on:
         required: false
         default: "false"
   schedule:
-    - cron: "13 * * * *"
+    - cron: "2-59/5 * * * *"
   push:
     branches:
       - main
@@ -27,6 +27,7 @@ concurrency:
 
 jobs:
   monitor:
+    if: vars.JOB_MONITOR_BACKEND != 'ec2'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -112,3 +113,34 @@ jobs:
         with:
           path: ${{ env.STATE_FILE }}
           key: canada-software-jobs-state-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Report actual monitoring interval
+        if: always()
+        env:
+          EXPECTED_INTERVAL_MINUTES: "5"
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          state_file = Path(os.environ["STATE_FILE"])
+          if not state_file.exists():
+              print("::warning::No monitoring state is available; inspect the failed step.")
+              raise SystemExit(0)
+          state = json.loads(state_file.read_text(encoding="utf-8"))
+          expected = int(os.environ["EXPECTED_INTERVAL_MINUTES"])
+          gap = state.get("last_check_gap_seconds")
+          summary = [
+              "## Job monitor timing",
+              f"Target check interval: {expected} minutes (GitHub schedules can be delayed).",
+              f"Latest completed check (UTC): {state.get('last_check_at', 'unknown')}",
+              f"Cycle duration: {state.get('last_check_duration_seconds', 'unknown')} seconds.",
+          ]
+          if gap is not None:
+              summary.append(f"Actual interval between checks: {gap / 60:.1f} minutes.")
+              if gap > expected * 120:
+                  print(f"::warning::Monitoring gap was {gap / 60:.1f} minutes; target is {expected} minutes.")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as output:
+              output.write("\n\n".join(summary) + "\n")
+          PY
